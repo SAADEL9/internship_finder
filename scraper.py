@@ -493,63 +493,84 @@ def filter_rank_dedupe(jobs: list[Job], config: dict[str, Any], seen: set[str]) 
     return ranked[: config["search"]["max_results_per_run"]]
 
 
-def telegram_message(jobs: list[Job]) -> str:
+def discord_message(jobs: list[Job]) -> dict[str, Any]:
     if not jobs:
-        return "Internship Opportunities Found\n\nNo new matching internship opportunities found today."
-    lines = ["Internship Opportunities Found", ""]
+        return {
+            "content": "Internship Opportunities Found",
+            "embeds": [
+                {
+                    "title": "No new matching internship opportunities found today.",
+                    "color": 0x5865F2,
+                }
+            ],
+        }
+    embeds = []
     for index, job in enumerate(jobs, start=1):
-        lines.extend(
-            [
-                f"#{index} {escape_md(job.company or 'Unknown Company')}",
-                escape_md(job.title),
-                f"Location: {escape_md(job.location or 'Casablanca/Morocco')}",
-                f"Posted: {escape_md(age_text(job.posted_at))}",
-                f"Publication Date: {escape_md(job.posted_at.strftime('%Y-%m-%d') if job.posted_at else 'Unknown Date')}",
-                f"Match Score: {job.match_score}/100",
-                f"Why: {escape_md(job.match_reason)}",
-                f"Link: {job.url}",
-                "",
-            ]
+        embeds.append(
+            {
+                "title": truncate(job.title, 256),
+                "url": job.url,
+                "description": truncate(job.match_reason, 300),
+                "color": embed_color(job),
+                "fields": [
+                    {"name": "Company", "value": truncate(job.company or "Unknown Company", 1024), "inline": True},
+                    {"name": "Location", "value": truncate(job.location or "Casablanca/Morocco", 1024), "inline": True},
+                    {
+                        "name": "Publication Date",
+                        "value": job.posted_at.strftime("%Y-%m-%d") if job.posted_at else "Unknown Date",
+                        "inline": True,
+                    },
+                    {"name": "Posted", "value": age_text(job.posted_at), "inline": True},
+                    {"name": "Match Score", "value": f"{job.match_score}/100", "inline": True},
+                    {"name": "Source", "value": truncate(job.source, 1024), "inline": True},
+                    {"name": "URL", "value": truncate(job.url, 1024), "inline": False},
+                ],
+                "footer": {"text": f"#{index}"},
+            }
         )
-    return "\n".join(lines).strip()
+    return {"content": "Internship Opportunities Found", "embeds": embeds}
 
 
-def escape_md(value: str) -> str:
-    return str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+def embed_color(job: Job) -> int:
+    if job.freshness_rank == 0:
+        return 0x2ECC71
+    if job.freshness_rank == 1:
+        return 0xF1C40F
+    return 0x95A5A6
 
 
-def send_telegram(message: str) -> bool:
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        logging.warning("Telegram secrets are not configured; message not sent.")
+def truncate(value: str, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def send_discord_notification(message: dict[str, Any] | str) -> bool:
+    webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
+    if not webhook_url:
+        logging.warning("Discord webhook URL is not configured; message not sent.")
         print(message)
         return False
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    chunks = split_message(message)
-    for chunk in chunks:
+    payload = {"content": message} if isinstance(message, str) else message
+    embeds = payload.get("embeds", [])
+    if not embeds:
+        response = requests.post(webhook_url, json=payload, timeout=20)
+        response.raise_for_status()
+        return True
+    for chunk in chunked(embeds, 10):
+        chunk_payload = {"content": payload.get("content", ""), "embeds": chunk}
         response = requests.post(
-            url,
-            json={"chat_id": chat_id, "text": chunk, "disable_web_page_preview": True},
+            webhook_url,
+            json=chunk_payload,
             timeout=20,
         )
         response.raise_for_status()
     return True
 
 
-def split_message(message: str, limit: int = 3900) -> list[str]:
-    chunks: list[str] = []
-    current = ""
-    for block in message.split("\n\n"):
-        addition = block + "\n\n"
-        if len(current) + len(addition) > limit:
-            chunks.append(current.strip())
-            current = addition
-        else:
-            current += addition
-    if current.strip():
-        chunks.append(current.strip())
-    return chunks
+def chunked(items: list[Any], size: int) -> list[list[Any]]:
+    return [items[index : index + size] for index in range(0, len(items), size)]
 
 
 def main() -> int:
@@ -568,7 +589,7 @@ def main() -> int:
     jobs.extend(discover_rss_jobs(client, config))
     ranked = filter_rank_dedupe(jobs, config, seen)
     logging.info("Found %s new ranked matching jobs from %s raw jobs", len(ranked), len(jobs))
-    sent = send_telegram(telegram_message(ranked))
+    sent = send_discord_notification(discord_message(ranked))
     if sent:
         for job in ranked:
             seen.add(job.dedupe_key)

@@ -1,6 +1,6 @@
 # Internship Finder
 
-Daily Python scraper that finds fresh Software Engineering internships in Casablanca, Morocco and sends new matches to Telegram from GitHub Actions, so your computer does not need to stay on.
+Daily Python scraper that finds fresh Software Engineering internships in Casablanca, Morocco and sends new matches to Discord from GitHub Actions, so your computer does not need to stay on.
 
 ## What It Does
 
@@ -11,40 +11,35 @@ Daily Python scraper that finds fresh Software Engineering internships in Casabl
 - Prioritizes offers posted in the last 24 hours.
 - Marks uncertain freshness as `Unknown Date` and ranks those below fresh dated offers.
 - Scores each offer from 0 to 100 using location, internship terms, skills, and freshness.
-- Stores seen jobs in `seen_jobs.json` to avoid duplicate Telegram alerts.
+- Stores seen jobs in `seen_jobs.json` to avoid duplicate Discord alerts.
 - Continues when one source fails and writes logs to `internship_finder.log`.
 
 ## Files
 
-- `scraper.py`: scraper, filtering, scoring, deduplication, and Telegram sender.
+- `scraper.py`: scraper, filtering, scoring, deduplication, and Discord webhook sender.
 - `config.yml`: keywords, filters, sources, and company career pages.
 - `requirements.txt`: Python dependencies.
 - `seen_jobs.json`: durable deduplication state.
 - `.github/workflows/internship-finder.yml`: daily and manual GitHub Actions workflow.
 
-## Telegram Setup
+## Discord Webhook Setup
 
-1. In Telegram, message `@BotFather`.
-2. Create a bot with `/newbot`.
-3. Copy the bot token.
-4. Send any message to your new bot.
-5. Get your chat id by opening this URL in a browser:
-
-```text
-https://api.telegram.org/botYOUR_BOT_TOKEN/getUpdates
-```
-
-6. In GitHub, open your repository settings:
+1. Open the Discord server and channel where you want internship alerts.
+2. Click the channel settings gear.
+3. Open `Integrations`.
+4. Open `Webhooks`.
+5. Click `New Webhook`.
+6. Choose the target channel and copy the webhook URL.
+7. In GitHub, open your repository settings:
 
 ```text
 Settings -> Secrets and variables -> Actions -> New repository secret
 ```
 
-7. Add these secrets:
+8. Add this secret:
 
 ```text
-TELEGRAM_BOT_TOKEN
-TELEGRAM_CHAT_ID
+DISCORD_WEBHOOK_URL
 ```
 
 ## GitHub Actions Schedule
@@ -69,11 +64,10 @@ Actions -> Internship Finder -> Run workflow
 
 ## Local Run
 
-Create a `.env` file if you want to test Telegram locally:
+Create a `.env` file if you want to test Discord locally:
 
 ```env
-TELEGRAM_BOT_TOKEN=your_token
-TELEGRAM_CHAT_ID=your_chat_id
+DISCORD_WEBHOOK_URL=your_discord_webhook_url
 ```
 
 Install and run:
@@ -83,7 +77,7 @@ pip install -r requirements.txt
 python scraper.py
 ```
 
-If Telegram secrets are not configured, the script prints the summary instead of sending it.
+If the Discord webhook URL is not configured, the script prints the summary instead of sending it.
 
 ## Customization
 

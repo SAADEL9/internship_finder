@@ -1,0 +1,142 @@
+search:
+  max_age_days: 14
+  priority_hours: 24
+  max_results_per_run: 25
+  request_timeout_seconds: 20
+  user_agent: "Mozilla/5.0 (compatible; InternshipFinder/1.0; +https://github.com/)"
+
+filters:
+  locations:
+    - casablanca
+    - casa
+    - morocco
+    - maroc
+    - remote morocco
+    - remote maroc
+    - hybride casablanca
+    - hybrid casablanca
+  internship_terms:
+    - stage
+    - stage pfe
+    - internship
+    - intern
+    - stagiaire
+    - pfe
+  skills:
+    - Next.js
+    - React
+    - TypeScript
+    - Node.js
+    - Java
+    - Spring Boot
+    - DevOps
+    - Docker
+    - Kubernetes
+    - Cloud
+    - Full Stack
+    - Backend
+    - Frontend
+    - Software Engineer
+    - Software Engineering
+    - Genie Logiciel
+    - Developpeur
+    - Developer
+
+queries:
+  - "stage pfe software engineer casablanca"
+  - "stage pfe developpeur casablanca"
+  - "internship software engineering casablanca morocco"
+  - "stage react next.js casablanca"
+  - "stage java spring boot casablanca"
+  - "stage devops docker kubernetes casablanca"
+  - "stage full stack casablanca"
+  - "stage backend frontend casablanca"
+  - "remote morocco software engineering internship"
+
+sources:
+  linkedin:
+    enabled: true
+    type: html
+    base_url: "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
+  indeed:
+    enabled: true
+    type: html
+    base_url: "https://ma.indeed.com/jobs"
+  glassdoor:
+    enabled: true
+    type: html
+    base_url: "https://www.glassdoor.com/Job/morocco-internship-software-engineer-jobs-SRCH_IL.0,7_IN162_KO8,36.htm"
+  welcome_to_the_jungle:
+    enabled: true
+    type: html
+    base_url: "https://www.welcometothejungle.com/fr/jobs"
+  rekrute:
+    enabled: true
+    type: html
+    base_url: "https://www.rekrute.com/offres-emploi-stage-informatique-casablanca.html"
+  emploi_ma:
+    enabled: true
+    type: html
+    base_url: "https://www.emploi.ma/recherche-jobs-maroc"
+  marocannonces:
+    enabled: true
+    type: html
+    base_url: "https://www.marocannonces.com/categorie/309/Emploi/Offres-emploi.html"
+  novojob:
+    enabled: true
+    type: html
+    base_url: "https://www.novojob.com/maroc/offres-d-emploi"
+  talent:
+    enabled: true
+    type: html
+    base_url: "https://ma.talent.com/jobs"
+  jooble:
+    enabled: true
+    type: html
+    base_url: "https://ma.jooble.org/SearchResult"
+  jobrapido:
+    enabled: true
+    type: html
+    base_url: "https://ma.jobrapido.com/"
+  monster:
+    enabled: true
+    type: html
+    base_url: "https://www.monster.com/jobs/search"
+  bayt:
+    enabled: true
+    type: html
+    base_url: "https://www.bayt.com/en/morocco/jobs/software-engineering-internship-jobs-in-casablanca/"
+
+company_career_pages:
+  - company: Capgemini
+    url: "https://www.capgemini.com/ma-fr/carrieres/rejoignez-nous/"
+  - company: CGI
+    url: "https://www.cgi.com/maroc/fr-ca/careers"
+  - company: DXC Technology
+    url: "https://careers.dxc.com/global/en/search-results"
+  - company: Oracle
+    url: "https://careers.oracle.com/jobs/"
+  - company: IBM
+    url: "https://www.ibm.com/careers/search"
+  - company: Deloitte
+    url: "https://apply.deloitte.com/careers/SearchJobs"
+  - company: PwC
+    url: "https://www.pwc.com/m1/en/careers.html"
+  - company: EY
+    url: "https://careers.ey.com/ey/search/"
+  - company: Orange
+    url: "https://orange.jobs/jobs/search.do"
+  - company: Inwi
+    url: "https://inwi.ma/carrieres"
+  - company: Maroc Telecom
+    url: "https://www.iam.ma/Groupe/Pages/RH/Offres-emploi.aspx"
+  - company: Attijariwafa Bank
+    url: "https://www.attijariwafabank.com/fr/carrieres"
+  - company: OCP
+    url: "https://www.ocpgroup.ma/careers"
+  - company: SQLI
+    url: "https://www.sqli.com/int-en/careers"
+  - company: Inetum
+    url: "https://www.inetum.com/en/careers/job-offers"
+  - company: Sopra Steria
+    url: "https://www.soprasteria.com/careers"

@@ -1,0 +1,60 @@
+name: Internship Finder
+
+on:
+  schedule:
+    # 08:00 Morocco time during UTC+1 periods. GitHub cron is UTC-only.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: internship-finder
+  cancel-in-progress: false
+
+jobs:
+  find-internships:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run internship finder
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scraper.py
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: internship-finder-log
+          path: internship_finder.log
+          if-no-files-found: ignore
+
+      - name: Persist seen jobs
+        run: |
+          if git diff --quiet -- seen_jobs.json; then
+            echo "No seen_jobs.json changes to commit."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add seen_jobs.json
+            git commit -m "Update seen internship jobs"
+            git pull --rebase
+            git push
+          fi

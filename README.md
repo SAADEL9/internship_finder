@@ -1,98 +1,73 @@
 # Internship Finder
 
-Daily Python scraper that finds fresh Software Engineering internships in Casablanca, Morocco and sends new matches to Discord from GitHub Actions, so your computer does not need to stay on.
+A robust Python scraper that finds fresh Software Engineering internships in Casablanca/Morocco and sends new matches to Discord via GitHub Actions twice daily.
 
 ## What It Does
 
-- Searches public job pages, RSS feeds, and company career pages.
-- Keeps only relevant `Stage`, `Stage PFE`, and internship offers for Casablanca, hybrid Casablanca, or remote Morocco.
-- Extracts publication dates from structured data, page metadata, RSS timestamps, visible date labels, and relative date text.
-- Ignores dated offers older than 14 days.
-- Prioritizes offers posted in the last 24 hours.
-- Marks uncertain freshness as `Unknown Date` and ranks those below fresh dated offers.
-- Scores each offer from 0 to 100 using location, internship terms, skills, and freshness.
-- Stores seen jobs in `seen_jobs.json` to avoid duplicate Discord alerts.
-- Continues when one source fails and writes logs to `internship_finder.log`.
+- **Multi-Source Scraping**: Searches public job pages, RSS feeds, and company career pages.
+- **Improved Relevancy**: Uses a relaxed scoring-based approach. Jobs must match a **Location** AND either an **Internship Term** (e.g., PFE, Stage) OR a **Skill** (e.g., React, Java).
+- **Intelligent Location Fallback**: If a job's specific location is missing from structured data, it falls back to a source-specific or company-specific default (e.g., Casablanca).
+- **Deduplication**: Stores seen jobs in `seen_jobs.json` and commits them back to the repository to avoid duplicate alerts.
+- **Discord Notifications**: Sends rich embeds to Discord with retry logic and rate-limit handling.
+- **Robustness**: Respects `robots.txt`, logs HTTP status codes, and provides a per-run summary.
 
 ## Files
 
-- `scraper.py`: scraper, filtering, scoring, deduplication, and Discord webhook sender.
-- `config.yml`: keywords, filters, sources, and company career pages.
+- `scraper.py`: Core logic for scraping, filtering, scoring, deduplication, and Discord notifications.
+- `config.yml`: Keywords, filters, sources, and company career pages.
 - `requirements.txt`: Python dependencies.
-- `seen_jobs.json`: durable deduplication state.
-- `.github/workflows/internship-finder.yml`: daily and manual GitHub Actions workflow.
+- `seen_jobs.json`: Durable deduplication state.
+- `.github/workflows/internship-finder.yml`: Twice-daily and manual GitHub Actions workflow.
 
 ## Discord Webhook Setup
 
 1. Open the Discord server and channel where you want internship alerts.
 2. Click the channel settings gear.
-3. Open `Integrations`.
-4. Open `Webhooks`.
-5. Click `New Webhook`.
-6. Choose the target channel and copy the webhook URL.
-7. In GitHub, open your repository settings:
-
-```text
-Settings -> Secrets and variables -> Actions -> New repository secret
-```
-
-8. Add this secret:
-
-```text
-DISCORD_WEBHOOK_URL
-```
+3. Open `Integrations` -> `Webhooks` -> `New Webhook`.
+4. Copy the webhook URL.
+5. In your GitHub repository settings:
+   - Go to `Settings` -> `Secrets and variables` -> `Actions`.
+   - Add a `New repository secret` named `DISCORD_WEBHOOK_URL` with your URL.
 
 ## GitHub Actions Schedule
 
-The workflow runs every day with:
+The workflow runs twice daily:
+- **16:00 Morocco Time** (`0 15 * * *` UTC)
+- **20:00 Morocco Time** (`0 19 * * *` UTC)
 
-```yaml
-cron: "0 7 * * *"
-```
+*Note: Times may shift by 1 hour during Morocco's DST transitions (e.g., Ramadan).*
 
-GitHub Actions cron is UTC-only. This corresponds to 08:00 in Morocco during UTC+1 periods. If Morocco switches to UTC, change it to:
+You can also run it manually from the **Actions** tab in GitHub.
 
-```yaml
-cron: "0 8 * * *"
-```
+## Local Development & Debug Mode
 
-You can also run it manually from:
-
-```text
-Actions -> Internship Finder -> Run workflow
-```
-
-## Local Run
-
-Create a `.env` file if you want to test Discord locally:
-
-```env
-DISCORD_WEBHOOK_URL=your_discord_webhook_url
-```
-
-Install and run:
-
+### Setup
 ```bash
 pip install -r requirements.txt
+```
+
+### Regular Run
+```bash
+# Set your webhook URL in a .env file or environment variable
+export DISCORD_WEBHOOK_URL="your_url_here"
 python scraper.py
 ```
 
-If the Discord webhook URL is not configured, the script prints the summary instead of sending it.
+### Debug Mode
+If you want to see exactly what is being scraped before filtering, use the `DEBUG` flag. This will dump all raw extracted jobs to a `debug_jobs.json` file.
+
+```bash
+export DEBUG=1
+python scraper.py
+```
 
 ## Customization
 
-Edit `config.yml` to add:
+Edit `config.yml` to tune the search:
+- **`filters`**: Add new skills, locations, or internship terms.
+- **`queries`**: Add new search strings for the scrapers.
+- **`sources`**: Enable/disable job boards.
+- **`company_career_pages`**: Add direct links to company hiring pages.
 
-- More skills.
-- More internship terms.
-- More search queries.
-- More company career pages.
-- More source URLs.
-
-The crawler respects `robots.txt` when it can be fetched. It does not log in, bypass CAPTCHAs, use stolen accounts, or evade site security.
-
-## Current Source Coverage
-
-Configured sources include LinkedIn public guest jobs, Indeed, Glassdoor, Welcome To The Jungle, ReKrute, Emploi.ma, MarocAnnonces, Novojob, Talent.com, Jooble, Jobrapido, Monster, Bayt, selected RSS feeds, and career pages for Capgemini, CGI, DXC, Oracle, IBM, Deloitte, PwC, EY, Orange, Inwi, Maroc Telecom, Attijariwafa Bank, OCP, SQLI, Inetum, and Sopra Steria.
-
-Some websites change markup frequently or block automated access. The app logs those failures and continues processing other sources.
+## Known Limitations
+The scraper respects `robots.txt`. Some major sites (LinkedIn, Indeed, Glassdoor) are heavily protected against scraping and have been disabled to ensure the workflow remains efficient. We prioritize reliable Morocco-specific sources and direct career pages.

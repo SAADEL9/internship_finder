@@ -1,9 +1,9 @@
 search:
   max_age_days: 14
   priority_hours: 24
-  max_results_per_run: 25
-  request_timeout_seconds: 20
-  user_agent: "Mozilla/5.0 (compatible; InternshipFinder/1.0; +https://github.com/)"
+  max_results_per_run: 40
+  request_timeout_seconds: 25
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 filters:
   locations:
@@ -51,92 +51,112 @@ queries:
   - "stage devops docker kubernetes casablanca"
   - "stage full stack casablanca"
   - "stage backend frontend casablanca"
-  - "remote morocco software engineering internship"
 
 sources:
-  linkedin:
-    enabled: true
-    type: html
-    base_url: "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
-  indeed:
-    enabled: true
-    type: html
-    base_url: "https://ma.indeed.com/jobs"
-  glassdoor:
-    enabled: true
-    type: html
-    base_url: "https://www.glassdoor.com/Job/morocco-internship-software-engineer-jobs-SRCH_IL.0,7_IN162_KO8,36.htm"
-  welcome_to_the_jungle:
-    enabled: true
-    type: html
-    base_url: "https://www.welcometothejungle.com/fr/jobs"
   rekrute:
     enabled: true
     type: html
     base_url: "https://www.rekrute.com/offres-emploi-stage-informatique-casablanca.html"
+    default_location: "Casablanca, Morocco"
   emploi_ma:
     enabled: true
     type: html
     base_url: "https://www.emploi.ma/recherche-jobs-maroc"
+    default_location: "Morocco"
   marocannonces:
     enabled: true
     type: html
     base_url: "https://www.marocannonces.com/categorie/309/Emploi/Offres-emploi.html"
+    default_location: "Casablanca, Morocco"
   novojob:
     enabled: true
     type: html
     base_url: "https://www.novojob.com/maroc/offres-d-emploi"
+    default_location: "Morocco"
   talent:
     enabled: true
     type: html
     base_url: "https://ma.talent.com/jobs"
+    default_location: "Casablanca, Morocco"
   jooble:
     enabled: true
     type: html
     base_url: "https://ma.jooble.org/SearchResult"
-  jobrapido:
-    enabled: true
-    type: html
-    base_url: "https://ma.jobrapido.com/"
-  monster:
-    enabled: true
-    type: html
-    base_url: "https://www.monster.com/jobs/search"
+    default_location: "Casablanca, Morocco"
   bayt:
     enabled: true
     type: html
     base_url: "https://www.bayt.com/en/morocco/jobs/software-engineering-internship-jobs-in-casablanca/"
+    default_location: "Casablanca, Morocco"
+  welcome_to_the_jungle:
+    enabled: true
+    type: html
+    base_url: "https://www.welcometothejungle.com/fr/jobs"
+    default_location: "Casablanca, Morocco"
+  # Problematic/Blocked sources
+  linkedin:
+    enabled: false
+    type: html
+    base_url: "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
+  indeed:
+    enabled: false
+    type: html
+    base_url: "https://ma.indeed.com/jobs"
+  glassdoor:
+    enabled: false
+    type: html
+    base_url: "https://www.glassdoor.com/Job/morocco-internship-software-engineer-jobs-SRCH_IL.0,7_IN162_KO8,36.htm"
+  monster:
+    enabled: false
+    type: html
+    base_url: "https://www.monster.com/jobs/search"
+  jobrapido:
+    enabled: false
+    type: html
+    base_url: "https://ma.jobrapido.com/"
 
 company_career_pages:
   - company: Capgemini
     url: "https://www.capgemini.com/ma-fr/carrieres/rejoignez-nous/"
+    default_location: "Casablanca/Rabat, Morocco"
   - company: CGI
     url: "https://www.cgi.com/maroc/fr-ca/careers"
+    default_location: "Casablanca/Rabat, Morocco"
   - company: DXC Technology
     url: "https://careers.dxc.com/global/en/search-results"
-  - company: Oracle
-    url: "https://careers.oracle.com/jobs/"
-  - company: IBM
-    url: "https://www.ibm.com/careers/search"
-  - company: Deloitte
-    url: "https://apply.deloitte.com/careers/SearchJobs"
-  - company: PwC
-    url: "https://www.pwc.com/m1/en/careers.html"
-  - company: EY
-    url: "https://careers.ey.com/ey/search/"
+    default_location: "Casablanca, Morocco"
+  # JS-rendered sites (Requests+BS4 can't parse)
+  # - company: Oracle
+  #   url: "https://careers.oracle.com/jobs/"
+  # - company: IBM
+  #   url: "https://www.ibm.com/careers/search"
+  # - company: Deloitte
+  #   url: "https://apply.deloitte.com/careers/SearchJobs"
+  # - company: PwC
+  #   url: "https://www.pwc.com/m1/en/careers.html"
+  # - company: EY
+  #   url: "https://careers.ey.com/ey/search/"
   - company: Orange
     url: "https://orange.jobs/jobs/search.do"
+    default_location: "Casablanca, Morocco"
   - company: Inwi
     url: "https://inwi.ma/carrieres"
+    default_location: "Casablanca, Morocco"
   - company: Maroc Telecom
     url: "https://www.iam.ma/Groupe/Pages/RH/Offres-emploi.aspx"
+    default_location: "Rabat, Morocco"
   - company: Attijariwafa Bank
     url: "https://www.attijariwafabank.com/fr/carrieres"
+    default_location: "Casablanca, Morocco"
   - company: OCP
     url: "https://www.ocpgroup.ma/careers"
+    default_location: "Casablanca, Morocco"
   - company: SQLI
     url: "https://www.sqli.com/int-en/careers"
+    default_location: "Casablanca/Rabat, Morocco"
   - company: Inetum
     url: "https://www.inetum.com/en/careers/job-offers"
+    default_location: "Casablanca, Morocco"
   - company: Sopra Steria
     url: "https://www.soprasteria.com/careers"
+    default_location: "Casablanca, Morocco"

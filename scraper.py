@@ -55,6 +55,20 @@ class Job:
         )
         return hashlib.sha256(base.encode("utf-8")).hexdigest()
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source": self.source,
+            "title": self.title,
+            "company": self.company,
+            "location": self.location,
+            "url": self.url,
+            "posted_at": self.posted_at.isoformat() if self.posted_at else None,
+            "summary": self.summary,
+            "match_score": self.match_score,
+            "match_reason": self.match_reason,
+            "matched_skills": self.matched_skills,
+        }
+
 
 def setup_logging() -> None:
     logging.basicConfig(
@@ -72,9 +86,12 @@ def load_config() -> dict[str, Any]:
 def load_seen() -> set[str]:
     if not SEEN_PATH.exists():
         return set()
-    with SEEN_PATH.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-    return set(data.get("seen", []))
+    try:
+        with SEEN_PATH.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        return set(data.get("seen", []))
+    except (json.JSONDecodeError, OSError):
+        return set()
 
 
 def save_seen(seen: set[str]) -> None:
@@ -166,22 +183,29 @@ class HttpClient:
                 logging.info("robots.txt unavailable for %s: %s", root, exc)
             self.robots[root] = robot
         try:
-            return self.robots[root].can_fetch(self.session.headers["User-Agent"], url)
+            is_allowed = self.robots[root].can_fetch(self.session.headers["User-Agent"], url)
+            if not is_allowed:
+                logging.info("robots.txt: Disallowed access to %s", url)
+            return is_allowed
         except Exception:
             return True
 
     def get(self, url: str, params: dict[str, str] | None = None) -> requests.Response | None:
+        full_url = url
         if params:
-            url = f"{url}?{urlencode(params)}"
-        if not self.allowed(url):
-            logging.info("Skipping disallowed by robots.txt: %s", url)
+            full_url = f"{url}?{urlencode(params)}"
+        
+        if not self.allowed(full_url):
             return None
+            
         try:
-            response = self.session.get(url, timeout=self.timeout)
+            response = self.session.get(url, params=params, timeout=self.timeout)
+            logging.info("HTTP %s: %s", response.status_code, full_url)
             response.raise_for_status()
             return response
         except requests.RequestException as exc:
-            logging.warning("Request failed for %s: %s", url, exc)
+            status = getattr(exc.response, "status_code", "Error")
+            logging.warning("HTTP %s: %s - %s", status, full_url, exc)
             return None
 
 
@@ -195,7 +219,7 @@ def text_from_node(node: Any, selectors: list[str]) -> str:
     return ""
 
 
-def extract_structured_jobs(soup: BeautifulSoup, source: str, page_url: str) -> list[Job]:
+def extract_structured_jobs(soup: BeautifulSoup, source: str, page_url: str, default_location: str = "") -> list[Job]:
     jobs: list[Job] = []
     for script in soup.select('script[type="application/ld+json"]'):
         try:
@@ -211,15 +235,22 @@ def extract_structured_jobs(soup: BeautifulSoup, source: str, page_url: str) -> 
             if isinstance(location, list):
                 location = location[0] if location else {}
             address = location.get("address") if isinstance(location, dict) else {}
-            location_text = " ".join(
-                str(address.get(k, "")) for k in ("addressLocality", "addressRegion", "addressCountry")
-            )
+            location_text = ""
+            if isinstance(address, dict):
+                location_text = " ".join(
+                    str(address.get(k, "")) for k in ("addressLocality", "addressRegion", "addressCountry")
+                )
+            elif isinstance(address, str):
+                location_text = address
+                
+            final_location = location_text.strip() or default_location
+            
             jobs.append(
                 Job(
                     source=source,
                     title=str(item.get("title") or "").strip(),
                     company=str(org.get("name") if isinstance(org, dict) else org or "").strip(),
-                    location=location_text.strip(),
+                    location=final_location,
                     url=urljoin(page_url, str(item.get("url") or page_url)),
                     posted_at=parse_date(item.get("datePosted") or item.get("validThrough")),
                     summary=BeautifulSoup(str(item.get("description") or ""), "html.parser").get_text(" ", strip=True),
@@ -240,7 +271,7 @@ def flatten_json_ld(items: list[Any]) -> list[dict[str, Any]]:
     return found
 
 
-def generic_cards(soup: BeautifulSoup, source: str, page_url: str) -> list[Job]:
+def generic_cards(soup: BeautifulSoup, source: str, page_url: str, default_location: str = "") -> list[Job]:
     selectors = [
         "[data-job-id]",
         "[data-testid*=job]",
@@ -250,11 +281,13 @@ def generic_cards(soup: BeautifulSoup, source: str, page_url: str) -> list[Job]:
         ".job",
         ".offer",
         ".annonce",
-        "article",
-        "li",
+        ".list-jobs .item",
+        ".jobs-list .job-item",
+        "div[class*='job-card']",
+        "div[class*='offer-card']",
     ]
     jobs: list[Job] = []
-    for card in soup.select(",".join(selectors))[:80]:
+    for card in soup.select(",".join(selectors))[:100]:
         link = card.select_one("a[href]")
         if not link:
             continue
@@ -280,7 +313,7 @@ def generic_cards(soup: BeautifulSoup, source: str, page_url: str) -> list[Job]:
                 source=source,
                 title=title,
                 company=company or "Unknown Company",
-                location=location,
+                location=location or default_location,
                 url=urljoin(page_url, link.get("href", "")),
                 posted_at=parse_date(date_value) or infer_date_from_text(summary),
                 summary=summary[:1000],
@@ -308,7 +341,6 @@ def infer_date_from_text(text: str) -> datetime | None:
 
 def fetch_rss(client: HttpClient, source: str, url: str) -> list[Job]:
     if not client.allowed(url):
-        logging.info("Skipping disallowed RSS: %s", url)
         return []
     try:
         feed = feedparser.parse(url, request_headers=client.session.headers)
@@ -331,69 +363,133 @@ def fetch_rss(client: HttpClient, source: str, url: str) -> list[Job]:
     return jobs
 
 
-def build_source_urls(config: dict[str, Any]) -> list[tuple[str, str, dict[str, str] | None]]:
+def build_source_urls(config: dict[str, Any]) -> list[dict[str, Any]]:
     sources = config["sources"]
     queries = config["queries"]
-    urls: list[tuple[str, str, dict[str, str] | None]] = []
+    source_tasks = []
     for name, source in sources.items():
         if not source.get("enabled", True):
             continue
         base = source["base_url"]
+        default_loc = source.get("default_location", "Casablanca/Morocco")
         for query in queries:
+            task = {"name": name, "url": base, "params": None, "default_location": default_loc}
             if name == "linkedin":
-                urls.append((name, base, {"keywords": query, "location": "Casablanca, Casablanca-Settat, Morocco"}))
+                task["params"] = {"keywords": query, "location": "Casablanca, Casablanca-Settat, Morocco"}
             elif name == "indeed":
-                urls.append((name, base, {"q": query, "l": "Casablanca"}))
+                task["params"] = {"q": query, "l": "Casablanca"}
             elif name == "welcome_to_the_jungle":
-                urls.append((name, base, {"query": query, "aroundQuery": "Casablanca"}))
+                task["params"] = {"query": query, "aroundQuery": "Casablanca"}
             elif name == "emploi_ma":
-                urls.append((name, base, {"f[0]": f"im_field_offre_region:76", "keys": query}))
+                task["params"] = {"f[0]": f"im_field_offre_region:76", "keys": query}
             elif name == "marocannonces":
-                urls.append((name, base, {"kw": query, "ville": "Casablanca"}))
+                task["params"] = {"kw": query, "ville": "Casablanca"}
             elif name == "talent":
-                urls.append((name, base, {"k": query, "l": "Casablanca"}))
+                task["params"] = {"k": query, "l": "Casablanca"}
             elif name == "jooble":
-                urls.append((name, base, {"ukw": query, "rgns": "Casablanca"}))
+                task["params"] = {"ukw": query, "rgns": "Casablanca"}
             elif name == "jobrapido":
-                urls.append((name, base, {"w": query, "l": "Casablanca"}))
+                task["params"] = {"w": query, "l": "Casablanca"}
             elif name == "monster":
-                urls.append((name, base, {"q": query, "where": "Casablanca"}))
-            else:
-                urls.append((name, base, None))
-    return urls
+                task["params"] = {"q": query, "where": "Casablanca"}
+            
+            source_tasks.append(task)
+    return source_tasks
 
 
 def fetch_source_jobs(client: HttpClient, config: dict[str, Any]) -> list[Job]:
     jobs: list[Job] = []
-    for source, url, params in build_source_urls(config):
-        response = client.get(url, params=params)
-        if not response:
-            continue
-        soup = BeautifulSoup(response.text, "html.parser")
-        page_url = response.url
-        found = extract_structured_jobs(soup, source, page_url)
-        found.extend(generic_cards(soup, source, page_url))
-        logging.info("%s produced %s raw jobs from %s", source, len(found), page_url)
-        jobs.extend(found)
+    debug_mode = os.getenv("DEBUG") == "1"
+    
+    for task in build_source_urls(config):
+        url = task["url"]
+        if task["params"]:
+            url = f"{url}?{urlencode(task['params'])}"
+        
+        is_allowed = client.allowed(url)
+        response = client.get(task["url"], params=task["params"])
+        
+        html_len = len(response.text) if response else 0
+        status = response.status_code if response else "N/A"
+        
+        json_ld_count = 0
+        generic_count = 0
+        filtered_count = 0
+        
+        if response:
+            soup = BeautifulSoup(response.text, "html.parser")
+            json_ld_jobs = extract_structured_jobs(soup, task["name"], response.url, task["default_location"])
+            json_ld_count = len(json_ld_jobs)
+            
+            generic_jobs = generic_cards(soup, task["name"], response.url, task["default_location"])
+            generic_count = len(generic_jobs)
+            
+            raw_found = json_ld_jobs + generic_jobs
+            for j in raw_found:
+                if is_relevant(j, config):
+                    filtered_count += 1
+            
+            jobs.extend(raw_found)
+            
+        if debug_mode:
+            print(f"\n--- DIAGNOSTIC: {task['name']} ---")
+            print(f"URL: {url}")
+            print(f"HTTP Status: {status}")
+            print(f"Robots.txt Allowed: {is_allowed}")
+            print(f"HTML Length: {html_len}")
+            print(f"JSON-LD Jobs: {json_ld_count}")
+            print(f"Generic Cards Jobs: {generic_count}")
+            print(f"Remaining after Filter: {filtered_count}")
+            
         time.sleep(0.4)
     return jobs
 
 
 def fetch_company_jobs(client: HttpClient, config: dict[str, Any]) -> list[Job]:
     jobs: list[Job] = []
+    debug_mode = os.getenv("DEBUG") == "1"
+    
     for company in config.get("company_career_pages", []):
+        is_allowed = client.allowed(company["url"])
         response = client.get(company["url"])
-        if not response:
-            continue
-        soup = BeautifulSoup(response.text, "html.parser")
-        found = extract_structured_jobs(soup, company["company"], response.url)
-        found.extend(generic_cards(soup, company["company"], response.url))
-        for job in found:
-            if not job.company or job.company == "Unknown Company":
-                job.company = company["company"]
-            job.source = f"company:{company['company']}"
-        logging.info("%s career page produced %s raw jobs", company["company"], len(found))
-        jobs.extend(found)
+        
+        html_len = len(response.text) if response else 0
+        status = response.status_code if response else "N/A"
+        
+        json_ld_count = 0
+        generic_count = 0
+        filtered_count = 0
+        
+        if response:
+            soup = BeautifulSoup(response.text, "html.parser")
+            default_loc = company.get("default_location", "Casablanca/Morocco")
+            
+            json_ld_jobs = extract_structured_jobs(soup, company["company"], response.url, default_loc)
+            json_ld_count = len(json_ld_jobs)
+            
+            generic_jobs = generic_cards(soup, company["company"], response.url, default_loc)
+            generic_count = len(generic_jobs)
+            
+            raw_found = json_ld_jobs + generic_jobs
+            for job in raw_found:
+                if not job.company or job.company == "Unknown Company":
+                    job.company = company["company"]
+                job.source = f"company:{company['company']}"
+                if is_relevant(job, config):
+                    filtered_count += 1
+            
+            jobs.extend(raw_found)
+
+        if debug_mode:
+            print(f"\n--- DIAGNOSTIC: {company['company']} ---")
+            print(f"URL: {company['url']}")
+            print(f"HTTP Status: {status}")
+            print(f"Robots.txt Allowed: {is_allowed}")
+            print(f"HTML Length: {html_len}")
+            print(f"JSON-LD Jobs: {json_ld_count}")
+            print(f"Generic Cards Jobs: {generic_count}")
+            print(f"Remaining after Filter: {filtered_count}")
+            
         time.sleep(0.4)
     return jobs
 
@@ -401,7 +497,6 @@ def fetch_company_jobs(client: HttpClient, config: dict[str, Any]) -> list[Job]:
 def discover_rss_jobs(client: HttpClient, config: dict[str, Any]) -> list[Job]:
     rss_urls = [
         "https://www.emploi.ma/rss.xml",
-        "https://ma.indeed.com/rss?q=stage+pfe+software+engineer&l=Casablanca",
         "https://ma.talent.com/rss?query=stage%20pfe%20software%20engineer&location=Casablanca",
     ]
     jobs: list[Job] = []
@@ -416,7 +511,8 @@ def is_relevant(job: Job, config: dict[str, Any]) -> bool:
     has_location = any(normalize_text(term) in haystack for term in filters["locations"])
     has_stage = any(normalize_text(term) in haystack for term in filters["internship_terms"])
     has_skill = any(normalize_text(skill) in haystack for skill in filters["skills"])
-    return has_location and has_stage and has_skill
+    # Relaxed logic: Location AND (Term OR Skill)
+    return has_location and (has_stage or has_skill)
 
 
 def score_job(job: Job, config: dict[str, Any]) -> None:
@@ -469,6 +565,14 @@ def score_job(job: Job, config: dict[str, Any]) -> None:
 def filter_rank_dedupe(jobs: list[Job], config: dict[str, Any], seen: set[str]) -> list[Job]:
     max_age = timedelta(days=config["search"]["max_age_days"])
     unique: dict[str, Job] = {}
+    
+    debug_mode = os.getenv("DEBUG") == "1"
+    if debug_mode:
+        with Path("debug_jobs.json").open("w", encoding="utf-8") as f:
+            json.dump([j.to_dict() for j in jobs], f, indent=2, ensure_ascii=False)
+        logging.info("DEBUG: Dumped %s raw jobs to debug_jobs.json", len(jobs))
+
+    relevant_count = 0
     for job in jobs:
         if not job.title or not job.url:
             continue
@@ -476,12 +580,19 @@ def filter_rank_dedupe(jobs: list[Job], config: dict[str, Any], seen: set[str]) 
             continue
         if not is_relevant(job, config):
             continue
+        
+        relevant_count += 1
         score_job(job, config)
+        
         if job.dedupe_key in seen:
             continue
+            
         existing = unique.get(job.dedupe_key)
         if not existing or job.match_score > existing.match_score:
             unique[job.dedupe_key] = job
+            
+    logging.info("Filter summary: %s raw -> %s relevant -> %s new/unique", len(jobs), relevant_count, len(unique))
+    
     ranked = sorted(
         unique.values(),
         key=lambda item: (
@@ -550,23 +661,38 @@ def send_discord_notification(message: dict[str, Any] | str) -> bool:
     webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
     if not webhook_url:
         logging.warning("Discord webhook URL is not configured; message not sent.")
-        print(message)
         return False
+    
     payload = {"content": message} if isinstance(message, str) else message
     embeds = payload.get("embeds", [])
+    
+    def post_with_retry(data):
+        for attempt in range(3):
+            try:
+                response = requests.post(webhook_url, json=data, timeout=20)
+                if response.status_code == 429:
+                    retry_after = response.json().get("retry_after", 5)
+                    logging.info("Discord rate limited. Waiting %ss", retry_after)
+                    time.sleep(retry_after)
+                    continue
+                response.raise_for_status()
+                logging.info("Discord notification sent successfully (HTTP %s)", response.status_code)
+                return True
+            except requests.RequestException as exc:
+                logging.warning("Discord notification failed (attempt %s/3): %s", attempt + 1, exc)
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+        return False
+
     if not embeds:
-        response = requests.post(webhook_url, json=payload, timeout=20)
-        response.raise_for_status()
-        return True
+        return post_with_retry(payload)
+    
+    success = True
     for chunk in chunked(embeds, 10):
         chunk_payload = {"content": payload.get("content", ""), "embeds": chunk}
-        response = requests.post(
-            webhook_url,
-            json=chunk_payload,
-            timeout=20,
-        )
-        response.raise_for_status()
-    return True
+        if not post_with_retry(chunk_payload):
+            success = False
+    return success
 
 
 def chunked(items: list[Any], size: int) -> list[list[Any]]:
@@ -583,17 +709,74 @@ def main() -> int:
     )
     seen = load_seen()
     logging.info("Starting internship search with %s seen keys", len(seen))
+    
     jobs: list[Job] = []
-    jobs.extend(fetch_source_jobs(client, config))
-    jobs.extend(fetch_company_jobs(client, config))
-    jobs.extend(discover_rss_jobs(client, config))
+    
+    # Track stats per source
+    source_stats = {}
+    
+    # 1. Sources
+    for task in build_source_urls(config):
+        resp = client.get(task["url"], params=task["params"])
+        if not resp:
+            continue
+        soup = BeautifulSoup(resp.text, "html.parser")
+        found = extract_structured_jobs(soup, task["name"], resp.url, task["default_location"])
+        found.extend(generic_cards(soup, task["name"], resp.url, task["default_location"]))
+        
+        source_name = task["name"]
+        source_stats[source_name] = source_stats.get(source_name, 0) + len(found)
+        jobs.extend(found)
+        time.sleep(0.5)
+
+    # 2. Company Pages
+    for company in config.get("company_career_pages", []):
+        resp = client.get(company["url"])
+        if not resp:
+            continue
+        soup = BeautifulSoup(resp.text, "html.parser")
+        default_loc = company.get("default_location", "Casablanca/Morocco")
+        found = extract_structured_jobs(soup, company["company"], resp.url, default_loc)
+        found.extend(generic_cards(soup, company["company"], resp.url, default_loc))
+        for job in found:
+            if not job.company or job.company == "Unknown Company":
+                job.company = company["company"]
+            job.source = f"company:{company['company']}"
+        
+        source_stats[f"company:{company['company']}"] = len(found)
+        jobs.extend(found)
+        time.sleep(0.5)
+
+    # 3. RSS
+    for url in [
+        "https://www.emploi.ma/rss.xml",
+        "https://ma.talent.com/rss?query=stage%20pfe%20software%20engineer&location=Casablanca",
+    ]:
+        found = fetch_rss(client, "rss", url)
+        source_stats[f"rss:{urlparse(url).netloc}"] = len(found)
+        jobs.extend(found)
+
     ranked = filter_rank_dedupe(jobs, config, seen)
-    logging.info("Found %s new ranked matching jobs from %s raw jobs", len(ranked), len(jobs))
+    
+    # Log summary
+    logging.info("--- Per-Source Breakdown ---")
+    for src, count in source_stats.items():
+        logging.info("  %s: %s raw jobs", src, count)
+    
+    logging.info("--- Final Summary ---")
+    logging.info("Total raw jobs: %s", len(jobs))
+    logging.info("New matching jobs to send: %s", len(ranked))
+
     sent = send_discord_notification(discord_message(ranked))
-    if sent:
+    
+    # Always save seen if ranked jobs exist and we attempted send
+    # If ranked is empty, we still save to maintain structure
+    if len(ranked) > 0 and sent:
         for job in ranked:
             seen.add(job.dedupe_key)
-        save_seen(seen)
+    
+    save_seen(seen)
+    
     return 0
 
 

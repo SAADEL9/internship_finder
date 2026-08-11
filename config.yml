@@ -23,36 +23,130 @@ filters:
     - stagiaire
     - pfe
   skills:
-    - Next.js
-    - React
-    - TypeScript
-    - Node.js
-    - Java
-    - Spring Boot
-    - DevOps
-    - Docker
-    - Kubernetes
-    - Cloud
-    - Full Stack
-    - Backend
-    - Frontend
-    - Software Engineer
-    - Software Engineering
-    - Genie Logiciel
-    - Developpeur
-    - Developer
+
+  # Languages
+  - Java
+  - JavaScript
+  - TypeScript
+  - Python
+  - C#
+  - C++
+  - PHP
+
+  # Backend
+  - Spring
+  - Spring Boot
+  - Node.js
+  - Express
+  - NestJS
+  - .NET
+  - Django
+  - Laravel
+
+  # Frontend
+  - Angular
+  - React
+  - Next.js
+  - Vue.js
+
+  # DevOps
+  - Docker
+  - Kubernetes
+  - Jenkins
+  - GitLab CI
+  - GitHub Actions
+  - CI/CD
+
+  # Cloud
+  - AWS
+  - Azure
+  - Google Cloud
+  - Cloud
+
+  # Databases
+  - PostgreSQL
+  - MySQL
+  - MongoDB
+  - Oracle
+
+  # General
+  - Full Stack
+  - Backend
+  - Frontend
+  - Software Engineer
+  - Software Developer
+  - Génie logiciel
+  - Génie informatique
+  - Développeur
+  - Developer
 
 queries:
-  - "stage pfe software engineer casablanca"
-  - "stage pfe developpeur casablanca"
-  - "internship software engineering casablanca morocco"
-  - "stage react next.js casablanca"
-  - "stage java spring boot casablanca"
-  - "stage devops docker kubernetes casablanca"
+
+  # General
+  - "stage pfe informatique casablanca"
+  - "stage fin études informatique casablanca"
+  - "stage fin d'études informatique casablanca"
+  - "stage développeur casablanca"
+  - "stage développement logiciel casablanca"
+  - "stage ingénieur informatique casablanca"
+  - "stage ingénieur logiciel casablanca"
+  - "stage pré embauche informatique casablanca"
+
+  # Backend
+  - "stage développeur Java casablanca"
+  - "stage Java Spring Boot casablanca"
+  - "stage backend Java casablanca"
+  - "stage backend Node.js casablanca"
+
+  # Frontend
+  - "stage développeur frontend casablanca"
+  - "stage React casablanca"
+  - "stage Angular casablanca"
+  - "stage Next.js casablanca"
+
+  # Full stack
   - "stage full stack casablanca"
-  - "stage backend frontend casablanca"
+  - "stage développeur full stack casablanca"
+
+  # DevOps / Cloud
+  - "stage DevOps casablanca"
+  - "stage Docker Kubernetes casablanca"
+  - "stage cloud computing casablanca"
+  - "stage AWS casablanca"
+  - "stage Azure casablanca"
+
+  # English
+  - "software engineer internship Casablanca"
+  - "software developer internship Casablanca"
+  - "backend developer internship Casablanca"
+  - "frontend developer internship Casablanca"
+  - "full stack developer internship Casablanca"
+  - "DevOps internship Casablanca"
 
 sources:
+  anapec:
+    enabled: true
+    type: html
+    base_url: "https://www.anapec.org/"
+    default_location: "Morocco"
+
+  emploi_public:
+    enabled: true
+    type: html
+    base_url: "https://www.emploi-public.ma/"
+    default_location: "Morocco"
+
+  dreamjob:
+    enabled: true
+    type: html
+    base_url: "https://www.dreamjob.ma/"
+    default_location: "Morocco"
+
+  stagiaire:
+    enabled: true
+    type: html
+    base_url: "https://www.stagiaire.ma/"
+    default_location: "Morocco"
   rekrute:
     enabled: true
     type: html
@@ -125,17 +219,62 @@ company_career_pages:
   - company: DXC Technology
     url: "https://careers.dxc.com/global/en/search-results"
     default_location: "Casablanca, Morocco"
-  # JS-rendered sites (Requests+BS4 can't parse)
-  # - company: Oracle
-  #   url: "https://careers.oracle.com/jobs/"
-  # - company: IBM
-  #   url: "https://www.ibm.com/careers/search"
-  # - company: Deloitte
-  #   url: "https://apply.deloitte.com/careers/SearchJobs"
-  # - company: PwC
-  #   url: "https://www.pwc.com/m1/en/careers.html"
-  # - company: EY
-  #   url: "https://careers.ey.com/ey/search/"
+ 
+  - company: Accenture
+    url: "https://www.accenture.com/ma-en/careers"
+    default_location: "Casablanca, Morocco"
+
+  - company: IBM
+    url: "https://www.ibm.com/careers/search"
+    default_location: "Casablanca, Morocco"
+
+  - company: Oracle
+    url: "https://careers.oracle.com/jobs/"
+    default_location: "Casablanca, Morocco"
+
+  - company: Deloitte
+    url: "https://apply.deloitte.com/careers/SearchJobs"
+    default_location: "Casablanca, Morocco"
+
+  - company: PwC
+    url: "https://www.pwc.com/m1/en/careers.html"
+    default_location: "Casablanca, Morocco"
+
+  - company: EY
+    url: "https://careers.ey.com/ey/search/"
+    default_location: "Casablanca, Morocco"
+
+  - company: Atos
+    url: "https://jobs.atos.net/"
+    default_location: "Casablanca, Morocco"
+
+  - company: Eviden
+    url: "https://jobs.atos.net/"
+    default_location: "Casablanca, Morocco"
+
+  - company: Alten
+    url: "https://www.alten.com/careers/"
+    default_location: "Casablanca, Morocco"
+
+  - company: Akkodis
+    url: "https://www.akkodis.com/en/careers"
+    default_location: "Casablanca, Morocco"
+
+  - company: Valeo
+    url: "https://valeo.wd3.myworkdayjobs.com/valeo"
+    default_location: "Tangier, Morocco"
+
+  - company: Stellantis
+    url: "https://careers.stellantis.com/"
+    default_location: "Morocco"
+
+  - company: Safran
+    url: "https://www.safran-group.com/careers"
+    default_location: "Morocco"
+
+  - company: Thales
+    url: "https://careers.thalesgroup.com/"
+    default_location: "Morocco"
   - company: Orange
     url: "https://orange.jobs/jobs/search.do"
     default_location: "Casablanca, Morocco"

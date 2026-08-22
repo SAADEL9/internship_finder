@@ -2,7 +2,7 @@ name: Internship Finder
 
 on:
   schedule:
-    # Morocco is UTC+1 (except during Ramadan)
+    # Morocco is UTC+1 (UTC+0 only during Ramadan)
     # 16:00 Morocco = 15:00 UTC
     - cron: "0 15 * * *"
     # 20:00 Morocco = 19:00 UTC
@@ -19,12 +19,11 @@ concurrency:
 jobs:
   find-internships:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -35,10 +34,15 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Run tests
+        run: |
+          pip install pytest
+          python -m pytest tests/ -q
+
       - name: Run internship finder
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          # DEBUG: "1" # Uncomment to enable debug mode and upload debug_jobs.json
+          # DEBUG: "1"  # uncomment to dump debug_jobs.json (uploaded below)
         run: python scraper.py
 
       - name: Upload logs and debug data

@@ -1,74 +1,52 @@
+"""Internship Finder: scrape Moroccan job sources, filter for SWE internships,
+rank, deduplicate and notify Discord.
+
+Pipeline: config.yml -> build fetch tasks (one per source x query, static pages
+once) -> polite parallel fetch -> per-source extraction -> relevance filter ->
+scoring -> dedupe against seen_jobs.json -> Discord embeds -> persist state.
+
+CLI:
+    python scraper.py [--debug] [--dry-run] [--sources a,b] [--limit-queries N]
+
+Env: DISCORD_WEBHOOK_URL (required to actually send), DEBUG=1 (= --debug).
+"""
 from __future__ import annotations
 
-import hashlib
+import argparse
 import json
 import logging
 import os
-import re
 import time
-from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
-from email.utils import parsedate_to_datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode, urljoin, urlparse
-from urllib.robotparser import RobotFileParser
+from urllib.parse import quote_plus
 
-import dateparser
-import feedparser
 import requests
 import yaml
-from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
+from extractors import (
+    EXTRACTORS,
+    Job,
+    Matcher,
+    age_text,
+    extract_rss_entries,
+    now_utc,
+)
+from fetcher import HttpClient, SourceStats, fetch_all
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "config.yml"
 SEEN_PATH = ROOT / "seen_jobs.json"
 LOG_PATH = ROOT / "internship_finder.log"
 
+STATE_RETENTION_DAYS_DEFAULT = 90
 
-@dataclass
-class Job:
-    source: str
-    title: str
-    company: str
-    location: str
-    url: str
-    posted_at: datetime | None = None
-    summary: str = ""
-    match_score: int = 0
-    match_reason: str = ""
-    freshness_rank: int = 2
-    matched_skills: list[str] = field(default_factory=list)
 
-    @property
-    def dedupe_key(self) -> str:
-        base = "|".join(
-            [
-                normalize_url(self.url),
-                normalize_text(self.company),
-                normalize_text(self.title),
-            ]
-        )
-        return hashlib.sha256(base.encode("utf-8")).hexdigest()
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "source": self.source,
-            "title": self.title,
-            "company": self.company,
-            "location": self.location,
-            "url": self.url,
-            "posted_at": self.posted_at.isoformat() if self.posted_at else None,
-            "summary": self.summary,
-            "match_score": self.match_score,
-            "match_reason": self.match_reason,
-            "matched_skills": self.matched_skills,
-        }
-
+# --------------------------------------------------------------------------
+# Config / state
+# --------------------------------------------------------------------------
 
 def setup_logging() -> None:
     logging.basicConfig(
@@ -83,458 +61,130 @@ def load_config() -> dict[str, Any]:
         return yaml.safe_load(handle)
 
 
-def load_seen() -> set[str]:
-    if not SEEN_PATH.exists():
-        return set()
+def load_seen(path: Path = SEEN_PATH) -> dict[str, str]:
+    """Return {dedupe_key: first_seen_iso}. Accepts v2 dict and legacy list."""
+    if not path.exists():
+        return {}
     try:
-        with SEEN_PATH.open("r", encoding="utf-8") as handle:
-            data = json.load(handle)
-        return set(data.get("seen", []))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return set()
+        logging.warning("seen_jobs.json unreadable; starting with empty state")
+        return {}
+    raw = data.get("seen", {}) if isinstance(data, dict) else {}
+    if isinstance(raw, list):  # legacy v1 format
+        return {key: now_utc().isoformat() for key in raw}
+    return dict(raw)
 
 
-def save_seen(seen: set[str]) -> None:
-    SEEN_PATH.write_text(
-        json.dumps({"seen": sorted(seen)}, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+def save_seen(seen: dict[str, str], retention_days: int, path: Path = SEEN_PATH) -> None:
+    cutoff = now_utc() - timedelta(days=retention_days)
+    pruned = {k: v for k, v in seen.items() if _parse_iso(v) is None or _parse_iso(v) >= cutoff}
+    if len(pruned) != len(seen):
+        logging.info("Pruned %s stale seen entries (>%s days)", len(seen) - len(pruned), retention_days)
+    payload = {"version": 2, "updated_at": now_utc().isoformat(), "seen": pruned}
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def normalize_text(value: str) -> str:
-    return re.sub(r"\s+", " ", value or "").strip().lower()
-
-
-def normalize_url(url: str) -> str:
-    parsed = urlparse(url)
-    path = re.sub(r"/+$", "", parsed.path)
-    return parsed._replace(query="", fragment="", path=path).geturl().lower()
-
-
-def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def parse_date(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    value = re.sub(r"\s+", " ", str(value)).strip()
-    if not value:
-        return None
+def _parse_iso(value: str) -> datetime | None:
     try:
-        parsed = parsedate_to_datetime(value)
-        if parsed:
-            return parsed.astimezone(timezone.utc)
-    except (TypeError, ValueError, IndexError):
-        pass
-    parsed = dateparser.parse(
-        value,
-        settings={
-            "RETURN_AS_TIMEZONE_AWARE": True,
-            "TIMEZONE": "UTC",
-            "TO_TIMEZONE": "UTC",
-            "PREFER_DATES_FROM": "past",
-        },
-        languages=["en", "fr"],
-    )
-    return parsed.astimezone(timezone.utc) if parsed else None
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
 
 
-def age_text(posted_at: datetime | None) -> str:
-    if not posted_at:
-        return "Unknown Date"
-    delta = now_utc() - posted_at
-    if delta < timedelta(hours=1):
-        return "posted less than 1 hour ago"
-    if delta < timedelta(days=1):
-        return f"posted {int(delta.total_seconds() // 3600)} hours ago"
-    days = delta.days
-    return f"posted {days} day{'s' if days != 1 else ''} ago"
+# --------------------------------------------------------------------------
+# Task building
+# --------------------------------------------------------------------------
 
-
-class HttpClient:
-    def __init__(self, user_agent: str, timeout: int) -> None:
-        self.timeout = timeout
-        self.session = requests.Session()
-        self.session.headers.update({"User-Agent": user_agent, "Accept-Language": "en,fr;q=0.9"})
-        retry = Retry(
-            total=3,
-            connect=3,
-            read=3,
-            backoff_factor=0.8,
-            status_forcelist=(429, 500, 502, 503, 504),
-            allowed_methods=("GET", "HEAD"),
-        )
-        self.session.mount("https://", HTTPAdapter(max_retries=retry))
-        self.session.mount("http://", HTTPAdapter(max_retries=retry))
-        self.robots: dict[str, RobotFileParser] = {}
-
-    def allowed(self, url: str) -> bool:
-        parsed = urlparse(url)
-        if not parsed.scheme or not parsed.netloc:
-            return False
-        root = f"{parsed.scheme}://{parsed.netloc}"
-        if root not in self.robots:
-            robot = RobotFileParser()
-            robot.set_url(urljoin(root, "/robots.txt"))
-            try:
-                robot.read()
-            except Exception as exc:
-                logging.info("robots.txt unavailable for %s: %s", root, exc)
-            self.robots[root] = robot
-        try:
-            is_allowed = self.robots[root].can_fetch(self.session.headers["User-Agent"], url)
-            if not is_allowed:
-                logging.info("robots.txt: Disallowed access to %s", url)
-            return is_allowed
-        except Exception:
-            return True
-
-    def get(self, url: str, params: dict[str, str] | None = None) -> requests.Response | None:
-        full_url = url
-        if params:
-            full_url = f"{url}?{urlencode(params)}"
-        
-        if not self.allowed(full_url):
-            return None
-            
-        try:
-            response = self.session.get(url, params=params, timeout=self.timeout)
-            logging.info("HTTP %s: %s", response.status_code, full_url)
-            response.raise_for_status()
-            return response
-        except requests.RequestException as exc:
-            status = getattr(exc.response, "status_code", "Error")
-            logging.warning("HTTP %s: %s - %s", status, full_url, exc)
-            return None
-
-
-def text_from_node(node: Any, selectors: list[str]) -> str:
-    for selector in selectors:
-        item = node.select_one(selector)
-        if item:
-            value = item.get("content") or item.get("datetime") or item.get_text(" ", strip=True)
-            if value:
-                return value
-    return ""
-
-
-def extract_structured_jobs(soup: BeautifulSoup, source: str, page_url: str, default_location: str = "") -> list[Job]:
-    jobs: list[Job] = []
-    for script in soup.select('script[type="application/ld+json"]'):
-        try:
-            payload = json.loads(script.string or "{}")
-        except json.JSONDecodeError:
-            continue
-        items = payload if isinstance(payload, list) else [payload]
-        for item in flatten_json_ld(items):
-            if item.get("@type") != "JobPosting":
-                continue
-            org = item.get("hiringOrganization") or {}
-            location = item.get("jobLocation") or {}
-            if isinstance(location, list):
-                location = location[0] if location else {}
-            address = location.get("address") if isinstance(location, dict) else {}
-            location_text = ""
-            if isinstance(address, dict):
-                location_text = " ".join(
-                    str(address.get(k, "")) for k in ("addressLocality", "addressRegion", "addressCountry")
-                )
-            elif isinstance(address, str):
-                location_text = address
-                
-            final_location = location_text.strip() or default_location
-            
-            jobs.append(
-                Job(
-                    source=source,
-                    title=str(item.get("title") or "").strip(),
-                    company=str(org.get("name") if isinstance(org, dict) else org or "").strip(),
-                    location=final_location,
-                    url=urljoin(page_url, str(item.get("url") or page_url)),
-                    posted_at=parse_date(item.get("datePosted") or item.get("validThrough")),
-                    summary=BeautifulSoup(str(item.get("description") or ""), "html.parser").get_text(" ", strip=True),
-                )
-            )
-    return jobs
-
-
-def flatten_json_ld(items: list[Any]) -> list[dict[str, Any]]:
-    found: list[dict[str, Any]] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        if "@graph" in item and isinstance(item["@graph"], list):
-            found.extend(flatten_json_ld(item["@graph"]))
-        else:
-            found.append(item)
-    return found
-
-
-def generic_cards(soup: BeautifulSoup, source: str, page_url: str, default_location: str = "") -> list[Job]:
-    selectors = [
-        "[data-job-id]",
-        "[data-testid*=job]",
-        ".job_seen_beacon",
-        ".jobsearch-SerpJobCard",
-        ".job-card",
-        ".job",
-        ".offer",
-        ".annonce",
-        ".list-jobs .item",
-        ".jobs-list .job-item",
-        "div[class*='job-card']",
-        "div[class*='offer-card']",
-    ]
-    jobs: list[Job] = []
-    for card in soup.select(",".join(selectors))[:100]:
-        link = card.select_one("a[href]")
-        if not link:
-            continue
-        title = text_from_node(
-            card,
-            [
-                "h1",
-                "h2",
-                "h3",
-                "[class*=title]",
-                "[data-testid*=title]",
-                "a[href]",
-            ],
-        )
-        if len(title) < 4:
-            continue
-        company = text_from_node(card, ["[class*=company]", "[data-testid*=company]", ".brand", ".recruiter"])
-        location = text_from_node(card, ["[class*=location]", "[data-testid*=location]", ".city", ".region"])
-        date_value = text_from_node(card, ["time", "[datetime]", "[class*=date]", "[class*=time]", "[class*=posted]"])
-        summary = card.get_text(" ", strip=True)
-        jobs.append(
-            Job(
-                source=source,
-                title=title,
-                company=company or "Unknown Company",
-                location=location or default_location,
-                url=urljoin(page_url, link.get("href", "")),
-                posted_at=parse_date(date_value) or infer_date_from_text(summary),
-                summary=summary[:1000],
-            )
-        )
-    return jobs
-
-
-def infer_date_from_text(text: str) -> datetime | None:
-    patterns = [
-        r"(?:posted|published|il y a|publié|publiee|publiée|date de publication)[^\n,.]{0,50}",
-        r"\b\d+\s+(?:hours?|days?|heures?|jours?)\s+ago\b",
-        r"\bil y a\s+\d+\s+(?:heures?|jours?)\b",
-        r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b",
-        r"\b\d{4}-\d{2}-\d{2}\b",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            parsed = parse_date(match.group(0))
-            if parsed:
-                return parsed
-    return None
-
-
-def fetch_rss(client: HttpClient, source: str, url: str) -> list[Job]:
-    if not client.allowed(url):
-        return []
-    try:
-        feed = feedparser.parse(url, request_headers=client.session.headers)
-    except Exception as exc:
-        logging.warning("RSS failed for %s: %s", url, exc)
-        return []
-    jobs: list[Job] = []
-    for entry in feed.entries[:50]:
-        jobs.append(
-            Job(
-                source=source,
-                title=getattr(entry, "title", ""),
-                company=getattr(entry, "author", "") or source,
-                location="",
-                url=getattr(entry, "link", url),
-                posted_at=parse_date(getattr(entry, "published", "") or getattr(entry, "updated", "")),
-                summary=getattr(entry, "summary", ""),
-            )
-        )
-    return jobs
-
-
-def build_source_urls(config: dict[str, Any]) -> list[dict[str, Any]]:
-    sources = config["sources"]
-    queries = config["queries"]
-    source_tasks = []
-    for name, source in sources.items():
+def build_tasks(config: dict[str, Any], only_sources: set[str] | None = None, limit_queries: int | None = None) -> list[dict[str, Any]]:
+    """One task per (source, query). Sources with a static ``url`` produce a single
+    task regardless of the query list — the v1 duplicate-homepage-fetch bug is
+    impossible with this construction."""
+    tasks: list[dict[str, Any]] = []
+    task_id = 0
+    for name, source in config.get("sources", {}).items():
         if not source.get("enabled", True):
             continue
-        base = source["base_url"]
-        default_loc = source.get("default_location", "Casablanca/Morocco")
+        if only_sources and name not in only_sources:
+            continue
+        kind = source.get("kind", "generic")
+        search_url = source.get("search_url")
+        static_url = source.get("url")
+        if not search_url and not static_url:
+            logging.warning("Source %s has no url/search_url; skipping", name)
+            continue
+        queries: list[str]
+        if search_url and "{query}" in search_url:
+            queries = source.get("queries") or config.get("queries") or []
+            if limit_queries:
+                queries = queries[:limit_queries]
+        else:
+            queries = [""]  # static page: fetched exactly once
         for query in queries:
-            task = {"name": name, "url": base, "params": None, "default_location": default_loc}
-            if name == "linkedin":
-                task["params"] = {"keywords": query, "location": "Casablanca, Casablanca-Settat, Morocco"}
-            elif name == "indeed":
-                task["params"] = {"q": query, "l": "Casablanca"}
-            elif name == "welcome_to_the_jungle":
-                task["params"] = {"query": query, "aroundQuery": "Casablanca"}
-            elif name == "emploi_ma":
-                task["params"] = {"f[0]": f"im_field_offre_region:76", "keys": query}
-            elif name == "marocannonces":
-                task["params"] = {"kw": query, "ville": "Casablanca"}
-            elif name == "talent":
-                task["params"] = {"k": query, "l": "Casablanca"}
-            elif name == "jooble":
-                task["params"] = {"ukw": query, "rgns": "Casablanca"}
-            elif name == "jobrapido":
-                task["params"] = {"w": query, "l": "Casablanca"}
-            elif name == "monster":
-                task["params"] = {"q": query, "where": "Casablanca"}
-            
-            source_tasks.append(task)
-    return source_tasks
+            url = search_url.replace("{query}", quote_plus(query)) if search_url else static_url
+            tasks.append(
+                {
+                    "id": task_id,
+                    "source": name,
+                    "kind": kind,
+                    "url": url,
+                    "query": query,
+                    "default_location": source.get("default_location", "Morocco"),
+                    "company": source.get("company", ""),
+                }
+            )
+            task_id += 1
+    return tasks
 
 
-def fetch_source_jobs(client: HttpClient, config: dict[str, Any]) -> list[Job]:
-    jobs: list[Job] = []
-    debug_mode = os.getenv("DEBUG") == "1"
-    
-    for task in build_source_urls(config):
-        url = task["url"]
-        if task["params"]:
-            url = f"{url}?{urlencode(task['params'])}"
-        
-        is_allowed = client.allowed(url)
-        response = client.get(task["url"], params=task["params"])
-        
-        html_len = len(response.text) if response else 0
-        status = response.status_code if response else "N/A"
-        
-        json_ld_count = 0
-        generic_count = 0
-        filtered_count = 0
-        
-        if response:
-            soup = BeautifulSoup(response.text, "html.parser")
-            json_ld_jobs = extract_structured_jobs(soup, task["name"], response.url, task["default_location"])
-            json_ld_count = len(json_ld_jobs)
-            
-            generic_jobs = generic_cards(soup, task["name"], response.url, task["default_location"])
-            generic_count = len(generic_jobs)
-            
-            raw_found = json_ld_jobs + generic_jobs
-            for j in raw_found:
-                if is_relevant(j, config):
-                    filtered_count += 1
-            
-            jobs.extend(raw_found)
-            
-        if debug_mode:
-            print(f"\n--- DIAGNOSTIC: {task['name']} ---")
-            print(f"URL: {url}")
-            print(f"HTTP Status: {status}")
-            print(f"Robots.txt Allowed: {is_allowed}")
-            print(f"HTML Length: {html_len}")
-            print(f"JSON-LD Jobs: {json_ld_count}")
-            print(f"Generic Cards Jobs: {generic_count}")
-            print(f"Remaining after Filter: {filtered_count}")
-            
-        time.sleep(0.4)
-    return jobs
+# --------------------------------------------------------------------------
+# Relevance & scoring
+# --------------------------------------------------------------------------
+
+def haystack_of(job: Job) -> str:
+    return " ".join([job.title, job.company, job.location, job.summary])
 
 
-def fetch_company_jobs(client: HttpClient, config: dict[str, Any]) -> list[Job]:
-    jobs: list[Job] = []
-    debug_mode = os.getenv("DEBUG") == "1"
-    
-    for company in config.get("company_career_pages", []):
-        is_allowed = client.allowed(company["url"])
-        response = client.get(company["url"])
-        
-        html_len = len(response.text) if response else 0
-        status = response.status_code if response else "N/A"
-        
-        json_ld_count = 0
-        generic_count = 0
-        filtered_count = 0
-        
-        if response:
-            soup = BeautifulSoup(response.text, "html.parser")
-            default_loc = company.get("default_location", "Casablanca/Morocco")
-            
-            json_ld_jobs = extract_structured_jobs(soup, company["company"], response.url, default_loc)
-            json_ld_count = len(json_ld_jobs)
-            
-            generic_jobs = generic_cards(soup, company["company"], response.url, default_loc)
-            generic_count = len(generic_jobs)
-            
-            raw_found = json_ld_jobs + generic_jobs
-            for job in raw_found:
-                if not job.company or job.company == "Unknown Company":
-                    job.company = company["company"]
-                job.source = f"company:{company['company']}"
-                if is_relevant(job, config):
-                    filtered_count += 1
-            
-            jobs.extend(raw_found)
-
-        if debug_mode:
-            print(f"\n--- DIAGNOSTIC: {company['company']} ---")
-            print(f"URL: {company['url']}")
-            print(f"HTTP Status: {status}")
-            print(f"Robots.txt Allowed: {is_allowed}")
-            print(f"HTML Length: {html_len}")
-            print(f"JSON-LD Jobs: {json_ld_count}")
-            print(f"Generic Cards Jobs: {generic_count}")
-            print(f"Remaining after Filter: {filtered_count}")
-            
-        time.sleep(0.4)
-    return jobs
+def is_relevant(job: Job, matcher: Matcher) -> bool:
+    """Location AND (internship term OR skill), minus title-level exclusions."""
+    haystack = haystack_of(job)
+    if not matcher.matched_locations(haystack):
+        return False
+    has_term = bool(matcher.matched_terms(haystack))
+    has_skill = bool(matcher.matched_skills(haystack))
+    if not (has_term or has_skill):
+        return False
+    if matcher.matched_excluded(job.title) and not matcher.matched_terms(job.title):
+        return False
+    return True
 
 
-def discover_rss_jobs(client: HttpClient, config: dict[str, Any]) -> list[Job]:
-    rss_urls = [
-        "https://www.emploi.ma/rss.xml",
-        "https://ma.talent.com/rss?query=stage%20pfe%20software%20engineer&location=Casablanca",
-    ]
-    jobs: list[Job] = []
-    for url in rss_urls:
-        jobs.extend(fetch_rss(client, "rss", url))
-    return jobs
+TITLE_TERM_BOOSTS = [
+    (("pfe", "stage", "internship", "stagiaire", "intern"), 8),
+    (("software", "developpeur", "développeur", "developer", "full stack", "full-stack",
+      "backend", "backend", "frontend", "data", "devops", "cloud"), 7),
+]
 
 
-def is_relevant(job: Job, config: dict[str, Any]) -> bool:
-    haystack = normalize_text(" ".join([job.title, job.company, job.location, job.summary]))
-    filters = config["filters"]
-    has_location = any(normalize_text(term) in haystack for term in filters["locations"])
-    has_stage = any(normalize_text(term) in haystack for term in filters["internship_terms"])
-    has_skill = any(normalize_text(skill) in haystack for skill in filters["skills"])
-    # Relaxed logic: Location AND (Term OR Skill)
-    return has_location and (has_stage or has_skill)
-
-
-def score_job(job: Job, config: dict[str, Any]) -> None:
-    haystack = normalize_text(" ".join([job.title, job.company, job.location, job.summary]))
-    filters = config["filters"]
-    matched_skills = [skill for skill in filters["skills"] if normalize_text(skill) in haystack]
-    matched_terms = [term for term in filters["internship_terms"] if normalize_text(term) in haystack]
-    location_match = any(normalize_text(term) in haystack for term in filters["locations"])
+def score_job(job: Job, matcher: Matcher, priority_hours: int, max_age_days: int) -> None:
+    haystack = haystack_of(job)
+    matched_skills = matcher.matched_skills(haystack)
+    matched_terms = matcher.matched_terms(haystack)
+    location_match = bool(matcher.matched_locations(haystack))
 
     score = 0
     if matched_terms:
         score += 25
     if location_match:
         score += 20
-    score += min(30, len(set(map(str.lower, matched_skills))) * 5)
+    score += min(30, len(set(matched_skills)) * 5)
 
     if job.posted_at:
         age = now_utc() - job.posted_at
-        if age <= timedelta(hours=config["search"]["priority_hours"]):
+        if age <= timedelta(hours=priority_hours):
             score += 25
             job.freshness_rank = 0
-        elif age <= timedelta(days=config["search"]["max_age_days"]):
+        elif age <= timedelta(days=max_age_days):
             score += 15
             job.freshness_rank = 1
         else:
@@ -543,56 +193,50 @@ def score_job(job: Job, config: dict[str, Any]) -> None:
         score += 5
         job.freshness_rank = 2
 
-    title = normalize_text(job.title)
-    if any(term in title for term in ("pfe", "stage", "internship", "stagiaire")):
-        score += 8
-    if any(term in title for term in ("software", "developpeur", "developer", "full stack", "backend", "frontend")):
-        score += 7
+    title = job.title.lower()
+    for needles, boost in TITLE_TERM_BOOSTS:
+        if any(n in title for n in needles):
+            score += boost
+            break
 
-    job.matched_skills = matched_skills
+    job.matched_skills = sorted(set(matched_skills))
     job.match_score = min(100, score)
-    reasons = []
+    reasons: list[str] = []
     if matched_terms:
         reasons.append(f"internship term: {', '.join(sorted(set(matched_terms))[:3])}")
     if location_match:
         reasons.append("Casablanca/Morocco location")
     if matched_skills:
-        reasons.append(f"skills: {', '.join(matched_skills[:5])}")
+        reasons.append(f"skills: {', '.join(sorted(set(matched_skills))[:5])}")
     reasons.append(age_text(job.posted_at))
     job.match_reason = "; ".join(reasons)
 
 
-def filter_rank_dedupe(jobs: list[Job], config: dict[str, Any], seen: set[str]) -> list[Job]:
-    max_age = timedelta(days=config["search"]["max_age_days"])
+def filter_rank_dedupe(
+    jobs: list[Job],
+    matcher: Matcher,
+    config: dict[str, Any],
+    seen: dict[str, str],
+) -> list[Job]:
+    search = config["search"]
+    max_age = timedelta(days=search["max_age_days"])
     unique: dict[str, Job] = {}
-    
-    debug_mode = os.getenv("DEBUG") == "1"
-    if debug_mode:
-        with Path("debug_jobs.json").open("w", encoding="utf-8") as f:
-            json.dump([j.to_dict() for j in jobs], f, indent=2, ensure_ascii=False)
-        logging.info("DEBUG: Dumped %s raw jobs to debug_jobs.json", len(jobs))
-
     relevant_count = 0
     for job in jobs:
         if not job.title or not job.url:
             continue
         if job.posted_at and now_utc() - job.posted_at > max_age:
             continue
-        if not is_relevant(job, config):
+        if not is_relevant(job, matcher):
             continue
-        
         relevant_count += 1
-        score_job(job, config)
-        
+        score_job(job, matcher, search["priority_hours"], search["max_age_days"])
         if job.dedupe_key in seen:
             continue
-            
         existing = unique.get(job.dedupe_key)
         if not existing or job.match_score > existing.match_score:
             unique[job.dedupe_key] = job
-            
     logging.info("Filter summary: %s raw -> %s relevant -> %s new/unique", len(jobs), relevant_count, len(unique))
-    
     ranked = sorted(
         unique.values(),
         key=lambda item: (
@@ -601,19 +245,85 @@ def filter_rank_dedupe(jobs: list[Job], config: dict[str, Any], seen: set[str]) 
             -item.match_score,
         ),
     )
-    return ranked[: config["search"]["max_results_per_run"]]
+    return ranked[: search["max_results_per_run"]]
+
+
+# --------------------------------------------------------------------------
+# Extraction dispatch
+# --------------------------------------------------------------------------
+
+def run_extraction(client: HttpClient, tasks: list[dict[str, Any]], config: dict[str, Any],
+                   stats: dict[str, SourceStats], matcher: Matcher) -> list[Job]:
+    search = config["search"]
+    results, fetch_stats = fetch_all(
+        client,
+        tasks,
+        max_workers=int(search.get("max_workers", 8)),
+        politeness_delay=float(search.get("politeness_delay_seconds", 0.5)),
+    )
+    # merge fetch stats into per-source stats
+    for source, fstat in fetch_stats.items():
+        stats.setdefault(source, fstat)
+    jobs: list[Job] = []
+    for task in tasks:
+        result = results.get(task["id"])
+        if result is None or not result.ok:
+            continue
+        source = task["source"]
+        found: list[Job] = []
+        try:
+            if task["kind"] == "rss":
+                import feedparser
+
+                feed = feedparser.parse(result.html)
+                found = extract_rss_entries(source, feed, task["default_location"])
+            else:
+                extractor = EXTRACTORS.get(task["kind"], EXTRACTORS["generic"])
+                found = extractor(
+                    source,
+                    result.html,
+                    result.final_url or task["url"],
+                    task["default_location"],
+                    company_hint=task["company"],
+                )
+        except Exception:
+            logging.exception("Extraction failed for %s (%s)", source, task["url"])
+            continue
+        st = stats.setdefault(source, SourceStats())
+        st.jobs_found += len(found)
+        st.relevant_found += sum(1 for j in found if is_relevant(j, matcher))
+        jobs.extend(found)
+    return jobs
+
+
+# --------------------------------------------------------------------------
+# Discord notifications
+# --------------------------------------------------------------------------
+
+def truncate(value: str, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def chunked(items: list[Any], size: int) -> list[list[Any]]:
+    return [items[index : index + size] for index in range(0, len(items), size)]
+
+
+def embed_color(job: Job) -> int:
+    if job.freshness_rank == 0:
+        return 0x2ECC71  # green: posted within priority window
+    if job.freshness_rank == 1:
+        return 0xF1C40F  # yellow: fresh-ish
+    return 0x95A5A6  # grey: unknown/older
 
 
 def discord_message(jobs: list[Job]) -> dict[str, Any]:
     if not jobs:
         return {
             "content": "Internship Opportunities Found",
-            "embeds": [
-                {
-                    "title": "No new matching internship opportunities found today.",
-                    "color": 0x5865F2,
-                }
-            ],
+            "embeds": [{"title": "No new matching internship opportunities found this run.", "color": 0x5865F2}],
         }
     embeds = []
     for index, job in enumerate(jobs, start=1):
@@ -624,17 +334,13 @@ def discord_message(jobs: list[Job]) -> dict[str, Any]:
                 "description": truncate(job.match_reason, 300),
                 "color": embed_color(job),
                 "fields": [
-                    {"name": "Company", "value": truncate(job.company or "Unknown Company", 1024), "inline": True},
-                    {"name": "Location", "value": truncate(job.location or "Casablanca/Morocco", 1024), "inline": True},
-                    {
-                        "name": "Publication Date",
-                        "value": job.posted_at.strftime("%Y-%m-%d") if job.posted_at else "Unknown Date",
-                        "inline": True,
-                    },
+                    {"name": "Company", "value": truncate(job.company or "Unknown Company", 200), "inline": True},
+                    {"name": "Location", "value": truncate(job.location or "Casablanca/Morocco", 200), "inline": True},
                     {"name": "Posted", "value": age_text(job.posted_at), "inline": True},
                     {"name": "Match Score", "value": f"{job.match_score}/100", "inline": True},
-                    {"name": "Source", "value": truncate(job.source, 1024), "inline": True},
-                    {"name": "URL", "value": truncate(job.url, 1024), "inline": False},
+                    {"name": "Skills", "value": truncate(", ".join(job.matched_skills) or "-", 200), "inline": True},
+                    {"name": "Source", "value": truncate(job.source, 100), "inline": True},
+                    {"name": "URL", "value": truncate(job.url, 400), "inline": False},
                 ],
                 "footer": {"text": f"#{index}"},
             }
@@ -642,141 +348,114 @@ def discord_message(jobs: list[Job]) -> dict[str, Any]:
     return {"content": "Internship Opportunities Found", "embeds": embeds}
 
 
-def embed_color(job: Job) -> int:
-    if job.freshness_rank == 0:
-        return 0x2ECC71
-    if job.freshness_rank == 1:
-        return 0xF1C40F
-    return 0x95A5A6
-
-
-def truncate(value: str, limit: int) -> str:
-    text = str(value or "").strip()
-    if len(text) <= limit:
-        return text
-    return text[: limit - 3].rstrip() + "..."
-
-
 def send_discord_notification(message: dict[str, Any] | str) -> bool:
     webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
     if not webhook_url:
         logging.warning("Discord webhook URL is not configured; message not sent.")
         return False
-    
     payload = {"content": message} if isinstance(message, str) else message
     embeds = payload.get("embeds", [])
-    
-    def post_with_retry(data):
+
+    def post_with_retry(data: dict[str, Any]) -> bool:
         for attempt in range(3):
             try:
                 response = requests.post(webhook_url, json=data, timeout=20)
                 if response.status_code == 429:
                     retry_after = response.json().get("retry_after", 5)
-                    logging.info("Discord rate limited. Waiting %ss", retry_after)
-                    time.sleep(retry_after)
+                    logging.info("Discord rate limited; waiting %ss", retry_after)
+                    time.sleep(float(retry_after))
                     continue
                 response.raise_for_status()
-                logging.info("Discord notification sent successfully (HTTP %s)", response.status_code)
+                logging.info("Discord notification sent (HTTP %s)", response.status_code)
                 return True
             except requests.RequestException as exc:
                 logging.warning("Discord notification failed (attempt %s/3): %s", attempt + 1, exc)
                 if attempt < 2:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
         return False
 
     if not embeds:
         return post_with_retry(payload)
-    
     success = True
     for chunk in chunked(embeds, 10):
-        chunk_payload = {"content": payload.get("content", ""), "embeds": chunk}
-        if not post_with_retry(chunk_payload):
+        if not post_with_retry({"content": payload.get("content", ""), "embeds": chunk}):
             success = False
     return success
 
 
-def chunked(items: list[Any], size: int) -> list[list[Any]]:
-    return [items[index : index + size] for index in range(0, len(items), size)]
+# --------------------------------------------------------------------------
+# Main
+# --------------------------------------------------------------------------
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Find SWE internships in Morocco and notify Discord")
+    parser.add_argument("--debug", action="store_true", help="dump raw extracted jobs to debug_jobs.json")
+    parser.add_argument("--dry-run", action="store_true", help="do everything except send the notification")
+    parser.add_argument("--sources", default="", help="comma-separated source names to limit to")
+    parser.add_argument("--limit-queries", type=int, default=None, help="use only the first N queries per source")
+    return parser.parse_args(argv)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    debug = args.debug or os.getenv("DEBUG") == "1"
     load_dotenv()
     setup_logging()
     config = load_config()
+    filters = config["filters"]
+    matcher = Matcher(
+        locations=filters["locations"],
+        internship_terms=filters["internship_terms"],
+        skills=filters["skills"],
+        exclude_title_terms=filters.get("exclude_title_terms", []),
+    )
     client = HttpClient(
         user_agent=config["search"]["user_agent"],
         timeout=int(config["search"]["request_timeout_seconds"]),
     )
+
+    only = {s.strip() for s in args.sources.split(",") if s.strip()} or None
+    tasks = build_tasks(config, only_sources=only, limit_queries=args.limit_queries)
+    logging.info("Built %s fetch tasks across %s sources", len(tasks), len({t['source'] for t in tasks}))
+
     seen = load_seen()
     logging.info("Starting internship search with %s seen keys", len(seen))
-    
-    jobs: list[Job] = []
-    
-    # Track stats per source
-    source_stats = {}
-    
-    # 1. Sources
-    for task in build_source_urls(config):
-        resp = client.get(task["url"], params=task["params"])
-        if not resp:
-            continue
-        soup = BeautifulSoup(resp.text, "html.parser")
-        found = extract_structured_jobs(soup, task["name"], resp.url, task["default_location"])
-        found.extend(generic_cards(soup, task["name"], resp.url, task["default_location"]))
-        
-        source_name = task["name"]
-        source_stats[source_name] = source_stats.get(source_name, 0) + len(found)
-        jobs.extend(found)
-        time.sleep(0.5)
 
-    # 2. Company Pages
-    for company in config.get("company_career_pages", []):
-        resp = client.get(company["url"])
-        if not resp:
-            continue
-        soup = BeautifulSoup(resp.text, "html.parser")
-        default_loc = company.get("default_location", "Casablanca/Morocco")
-        found = extract_structured_jobs(soup, company["company"], resp.url, default_loc)
-        found.extend(generic_cards(soup, company["company"], resp.url, default_loc))
-        for job in found:
-            if not job.company or job.company == "Unknown Company":
-                job.company = company["company"]
-            job.source = f"company:{company['company']}"
-        
-        source_stats[f"company:{company['company']}"] = len(found)
-        jobs.extend(found)
-        time.sleep(0.5)
+    stats: dict[str, SourceStats] = {}
+    started = time.monotonic()
+    jobs = run_extraction(client, tasks, config, stats, matcher)
+    ranked = filter_rank_dedupe(jobs, matcher, config, seen)
 
-    # 3. RSS
-    for url in [
-        "https://www.emploi.ma/rss.xml",
-        "https://ma.talent.com/rss?query=stage%20pfe%20software%20engineer&location=Casablanca",
-    ]:
-        found = fetch_rss(client, "rss", url)
-        source_stats[f"rss:{urlparse(url).netloc}"] = len(found)
-        jobs.extend(found)
+    if debug:
+        dump = ROOT / "debug_jobs.json"
+        dump.write_text(
+            json.dumps([j.to_dict() for j in jobs], indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        logging.info("DEBUG: dumped %s raw jobs to %s", len(jobs), dump)
 
-    ranked = filter_rank_dedupe(jobs, config, seen)
-    
-    # Log summary
-    logging.info("--- Per-Source Breakdown ---")
-    for src, count in source_stats.items():
-        logging.info("  %s: %s raw jobs", src, count)
-    
-    logging.info("--- Final Summary ---")
-    logging.info("Total raw jobs: %s", len(jobs))
-    logging.info("New matching jobs to send: %s", len(ranked))
+    logging.info("--- Per-source breakdown ---")
+    for source in sorted(stats):
+        st = stats[source]
+        notes = f" ({'; '.join(st.notes)})" if st.notes else ""
+        logging.info(
+            "  %s: %s requests, %s failed, %s jobs extracted, %s relevant%s",
+            source, st.requests, st.failures, st.jobs_found, st.relevant_found, notes,
+        )
+    logging.info("--- Final summary ---")
+    logging.info("Total raw jobs: %s | new matching jobs: %s | elapsed %.1fs",
+                 len(jobs), len(ranked), time.monotonic() - started)
 
-    sent = send_discord_notification(discord_message(ranked))
-    
-    # Always save seen if ranked jobs exist and we attempted send
-    # If ranked is empty, we still save to maintain structure
-    if len(ranked) > 0 and sent:
+    sent = False
+    if not args.dry_run:
+        sent = send_discord_notification(discord_message(ranked))
+    else:
+        logging.info("Dry run: notification skipped")
+
+    if ranked and sent:
         for job in ranked:
-            seen.add(job.dedupe_key)
-    
-    save_seen(seen)
-    
+            seen[job.dedupe_key] = now_utc().isoformat()
+    retention = int(config["search"].get("state_retention_days", STATE_RETENTION_DAYS_DEFAULT))
+    save_seen(seen, retention)
     return 0
 
 

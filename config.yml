@@ -1,8 +1,25 @@
+# Internship Finder configuration
+#
+# Source kinds:
+#   generic         JSON-LD (schema.org JobPosting) + CSS card heuristics
+#   wordpress       WP listing articles (dreamjob.ma family)
+#   rekrute         rekrute.com offer links
+#   marocannonces   marocannonces.com listing rows
+#   talent          ma.talent.com SSR cards
+#   successfactors  SAP SuccessFactors job lists (/JobDetail/ links)
+#   rss             RSS/Atom feed
+#
+# A source with `search_url` (containing {query}) is fetched once per query;
+# a source with a static `url` is fetched exactly once per run.
+
 search:
   max_age_days: 14
   priority_hours: 24
   max_results_per_run: 40
   request_timeout_seconds: 25
+  max_workers: 8
+  politeness_delay_seconds: 0.6
+  state_retention_days: 90
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 filters:
@@ -22,280 +39,131 @@ filters:
     - intern
     - stagiaire
     - pfe
+  # Title-level exclusions: a job whose TITLE matches one of these is dropped
+  # unless the title itself also contains an internship term.
+  exclude_title_terms:
+    - senior
+    - manager
+    - directeur
+    - directrice
+    - architecte
+    - commercial
+    - marketing
+    - comptable
+    - juriste
   skills:
-
-  # Languages
-  - Java
-  - JavaScript
-  - TypeScript
-  - Python
-  - C#
-  - C++
-  - PHP
-
-  # Backend
-  - Spring
-  - Spring Boot
-  - Node.js
-  - Express
-  - NestJS
-  - .NET
-  - Django
-  - Laravel
-
-  # Frontend
-  - Angular
-  - React
-  - Next.js
-  - Vue.js
-
-  # DevOps
-  - Docker
-  - Kubernetes
-  - Jenkins
-  - GitLab CI
-  - GitHub Actions
-  - CI/CD
-
-  # Cloud
-  - AWS
-  - Azure
-  - Google Cloud
-  - Cloud
-
-  # Databases
-  - PostgreSQL
-  - MySQL
-  - MongoDB
-  - Oracle
-
-  # General
-  - Full Stack
-  - Backend
-  - Frontend
-  - Software Engineer
-  - Software Developer
-  - Génie logiciel
-  - Génie informatique
-  - Développeur
-  - Developer
+    # Languages
+    - Java
+    - JavaScript
+    - TypeScript
+    - Python
+    - C#
+    - C++
+    - PHP
+    # Backend
+    - Spring
+    - Spring Boot
+    - Node.js
+    - Express
+    - NestJS
+    - .NET
+    - Django
+    - Laravel
+    # Frontend
+    - Angular
+    - React
+    - Next.js
+    - Vue.js
+    # DevOps
+    - Docker
+    - Kubernetes
+    - Jenkins
+    - GitLab CI
+    - GitHub Actions
+    - CI/CD
+    # Cloud
+    - AWS
+    - Azure
+    - Google Cloud
+    # Databases
+    - PostgreSQL
+    - MySQL
+    - MongoDB
+    - Oracle
+    # General SWE
+    - Full Stack
+    - Backend
+    - Frontend
+    - Software Engineer
+    - Software Developer
+    - Génie logiciel
+    - Génie informatique
+    - Développeur
+    - Developer
 
 queries:
-
-  # General
-  - "stage pfe informatique casablanca"
-  - "stage fin études informatique casablanca"
-  - "stage fin d'études informatique casablanca"
-  - "stage développeur casablanca"
-  - "stage développement logiciel casablanca"
-  - "stage ingénieur informatique casablanca"
-  - "stage ingénieur logiciel casablanca"
-  - "stage pré embauche informatique casablanca"
-
-  # Backend
-  - "stage développeur Java casablanca"
-  - "stage Java Spring Boot casablanca"
-  - "stage backend Java casablanca"
-  - "stage backend Node.js casablanca"
-
-  # Frontend
-  - "stage développeur frontend casablanca"
-  - "stage React casablanca"
-  - "stage Angular casablanca"
-  - "stage Next.js casablanca"
-
-  # Full stack
-  - "stage full stack casablanca"
-  - "stage développeur full stack casablanca"
-
-  # DevOps / Cloud
-  - "stage DevOps casablanca"
-  - "stage Docker Kubernetes casablanca"
-  - "stage cloud computing casablanca"
-  - "stage AWS casablanca"
-  - "stage Azure casablanca"
-
-  # English
-  - "software engineer internship Casablanca"
-  - "software developer internship Casablanca"
-  - "backend developer internship Casablanca"
-  - "frontend developer internship Casablanca"
-  - "full stack developer internship Casablanca"
-  - "DevOps internship Casablanca"
+  - "stage informatique"
+  - "stage pfe informatique"
+  - "stage fin d'études informatique"
+  - "stage développeur"
+  - "stage ingénieur informatique"
+  - "stagiaire informatique"
+  - "stage java"
+  - "stage react"
+  - "stage full stack"
+  - "stage devops"
+  - "stage data"
+  - "stage web"
+  - "stage cybersécurité"
+  - "software engineer internship"
 
 sources:
-  anapec:
-    enabled: true
-    type: html
-    base_url: "https://www.anapec.org/"
-    default_location: "Morocco"
-
-  emploi_public:
-    enabled: true
-    type: html
-    base_url: "https://www.emploi-public.ma/"
-    default_location: "Morocco"
-
+  # ---- verified working (server-rendered, selectors tested) ----
   dreamjob:
     enabled: true
-    type: html
-    base_url: "https://www.dreamjob.ma/"
+    kind: wordpress
+    search_url: "https://www.dreamjob.ma/?s={query}"
     default_location: "Morocco"
 
-  stagiaire:
-    enabled: true
-    type: html
-    base_url: "https://www.stagiaire.ma/"
-    default_location: "Morocco"
   rekrute:
     enabled: true
-    type: html
-    base_url: "https://www.rekrute.com/offres-emploi-stage-informatique-casablanca.html"
-    default_location: "Casablanca, Morocco"
-  emploi_ma:
-    enabled: true
-    type: html
-    base_url: "https://www.emploi.ma/recherche-jobs-maroc"
+    kind: rekrute
+    search_url: "https://www.rekrute.com/offres.html?st=d&keywordNew=1&jobLocation=RK&keyword={query}"
     default_location: "Morocco"
-  marocannonces:
-    enabled: true
-    type: html
-    base_url: "https://www.marocannonces.com/categorie/309/Emploi/Offres-emploi.html"
-    default_location: "Casablanca, Morocco"
-  novojob:
-    enabled: true
-    type: html
-    base_url: "https://www.novojob.com/maroc/offres-d-emploi"
-    default_location: "Morocco"
+
   talent:
     enabled: true
-    type: html
-    base_url: "https://ma.talent.com/jobs"
+    kind: talent
+    search_url: "https://ma.talent.com/jobs?k={query}&l=Casablanca"
     default_location: "Casablanca, Morocco"
-  jooble:
+
+  deloitte:
     enabled: true
-    type: html
-    base_url: "https://ma.jooble.org/SearchResult"
-    default_location: "Casablanca, Morocco"
-  bayt:
+    kind: successfactors
+    search_url: "https://apply.deloitte.com/en_US/careers/SearchJobs/?listFilterMode=1&jobRecordsPerPage=20&keyword={query}"
+    company: "Deloitte"
+    default_location: "Global"
+    queries:
+      - "stage maroc"
+      - "intern morocco"
+
+  # ---- blocked locally by Cloudflare (HTTP 403) but reachable from other
+  #      networks (e.g. GitHub Actions runners); kept enabled, failures tolerated ----
+  emploi_ma:
     enabled: true
-    type: html
-    base_url: "https://www.bayt.com/en/morocco/jobs/software-engineering-internship-jobs-in-casablanca/"
-    default_location: "Casablanca, Morocco"
-  welcome_to_the_jungle:
+    kind: generic
+    search_url: "https://www.emploi.ma/recherche-jobs-maroc?f%5B0%5D=im_field_offre_region%3A76&keys={query}"
+    default_location: "Morocco"
+    tolerate_failure: true
+    queries:
+      - "stage informatique"
+      - "stage pfe"
+      - "stage développeur"
+      - "stagiaire informatique"
+
+  emploi_ma_rss:
     enabled: true
-    type: html
-    base_url: "https://www.welcometothejungle.com/fr/jobs"
-    default_location: "Casablanca, Morocco"
-  # Problematic/Blocked sources
-  linkedin:
-    enabled: false
-    type: html
-    base_url: "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
-  indeed:
-    enabled: false
-    type: html
-    base_url: "https://ma.indeed.com/jobs"
-  glassdoor:
-    enabled: false
-    type: html
-    base_url: "https://www.glassdoor.com/Job/morocco-internship-software-engineer-jobs-SRCH_IL.0,7_IN162_KO8,36.htm"
-  monster:
-    enabled: false
-    type: html
-    base_url: "https://www.monster.com/jobs/search"
-  jobrapido:
-    enabled: false
-    type: html
-    base_url: "https://ma.jobrapido.com/"
-
-company_career_pages:
-  - company: Capgemini
-    url: "https://www.capgemini.com/ma-fr/carrieres/rejoignez-nous/"
-    default_location: "Casablanca/Rabat, Morocco"
-  - company: CGI
-    url: "https://www.cgi.com/maroc/fr-ca/careers"
-    default_location: "Casablanca/Rabat, Morocco"
-  - company: DXC Technology
-    url: "https://careers.dxc.com/global/en/search-results"
-    default_location: "Casablanca, Morocco"
- 
-  - company: Accenture
-    url: "https://www.accenture.com/ma-en/careers"
-    default_location: "Casablanca, Morocco"
-
-  - company: IBM
-    url: "https://www.ibm.com/careers/search"
-    default_location: "Casablanca, Morocco"
-
-  - company: Oracle
-    url: "https://careers.oracle.com/jobs/"
-    default_location: "Casablanca, Morocco"
-
-  - company: Deloitte
-    url: "https://apply.deloitte.com/careers/SearchJobs"
-    default_location: "Casablanca, Morocco"
-
-  - company: PwC
-    url: "https://www.pwc.com/m1/en/careers.html"
-    default_location: "Casablanca, Morocco"
-
-  - company: EY
-    url: "https://careers.ey.com/ey/search/"
-    default_location: "Casablanca, Morocco"
-
-  - company: Atos
-    url: "https://jobs.atos.net/"
-    default_location: "Casablanca, Morocco"
-
-  - company: Eviden
-    url: "https://jobs.atos.net/"
-    default_location: "Casablanca, Morocco"
-
-  - company: Alten
-    url: "https://www.alten.com/careers/"
-    default_location: "Casablanca, Morocco"
-
-  - company: Akkodis
-    url: "https://www.akkodis.com/en/careers"
-    default_location: "Casablanca, Morocco"
-
-  - company: Valeo
-    url: "https://valeo.wd3.myworkdayjobs.com/valeo"
-    default_location: "Tangier, Morocco"
-
-  - company: Stellantis
-    url: "https://careers.stellantis.com/"
+    kind: rss
+    url: "https://www.emploi.ma/rss.xml"
     default_location: "Morocco"
-
-  - company: Safran
-    url: "https://www.safran-group.com/careers"
-    default_location: "Morocco"
-
-  - company: Thales
-    url: "https://careers.thalesgroup.com/"
-    default_location: "Morocco"
-  - company: Orange
-    url: "https://orange.jobs/jobs/search.do"
-    default_location: "Casablanca, Morocco"
-  - company: Inwi
-    url: "https://inwi.ma/carrieres"
-    default_location: "Casablanca, Morocco"
-  - company: Maroc Telecom
-    url: "https://www.iam.ma/Groupe/Pages/RH/Offres-emploi.aspx"
-    default_location: "Rabat, Morocco"
-  - company: Attijariwafa Bank
-    url: "https://www.attijariwafabank.com/fr/carrieres"
-    default_location: "Casablanca, Morocco"
-  - company: OCP
-    url: "https://www.ocpgroup.ma/careers"
-    default_location: "Casablanca, Morocco"
-  - company: SQLI
-    url: "https://www.sqli.com/int-en/careers"
-    default_location: "Casablanca/Rabat, Morocco"
-  - company: Inetum
-    url: "https://www.inetum.com/en/careers/job-offers"
-    default_location: "Casablanca, Morocco"
-  - company: Sopra Steria
-    url: "https://www.soprasteria.com/careers"
-    default_location: "Casablanca, Morocco"
+    tolerate_failure: true

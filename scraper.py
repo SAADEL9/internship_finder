@@ -32,6 +32,8 @@ from extractors import (
     Matcher,
     age_text,
     extract_rss_entries,
+    normalize_text,
+    normalize_url,
     now_utc,
 )
 from fetcher import HttpClient, SourceStats, fetch_all
@@ -146,13 +148,15 @@ def haystack_of(job: Job) -> str:
 
 
 def is_relevant(job: Job, matcher: Matcher) -> bool:
-    """Location AND (internship term OR skill), minus title-level exclusions."""
+    """The job must be an internship, in the IT/software domain, in scope:
+    Location AND Internship Term AND (Skill / IT-domain term), minus
+    title-level exclusions (senior/manager/... unless the title says stage)."""
     haystack = haystack_of(job)
     if not matcher.matched_locations(haystack):
         return False
-    has_term = bool(matcher.matched_terms(haystack))
-    has_skill = bool(matcher.matched_skills(haystack))
-    if not (has_term or has_skill):
+    if not matcher.matched_terms(haystack):
+        return False
+    if not matcher.matched_skills(haystack):
         return False
     if matcher.matched_excluded(job.title) and not matcher.matched_terms(job.title):
         return False
@@ -221,6 +225,7 @@ def filter_rank_dedupe(
     search = config["search"]
     max_age = timedelta(days=search["max_age_days"])
     unique: dict[str, Job] = {}
+    by_url_company: dict[tuple[str, str], Job] = {}
     relevant_count = 0
     for job in jobs:
         if not job.title or not job.url:
@@ -236,9 +241,16 @@ def filter_rank_dedupe(
         existing = unique.get(job.dedupe_key)
         if not existing or job.match_score > existing.match_score:
             unique[job.dedupe_key] = job
-    logging.info("Filter summary: %s raw -> %s relevant -> %s new/unique", len(jobs), relevant_count, len(unique))
+    # secondary pass: the same offer can appear twice with slightly different
+    # titles (e.g. rekrute listing + sidebar); collapse by URL + company
+    for job in unique.values():
+        key = (normalize_url(job.url), normalize_text(job.company))
+        existing = by_url_company.get(key)
+        if not existing or job.match_score > existing.match_score:
+            by_url_company[key] = job
+    logging.info("Filter summary: %s raw -> %s relevant -> %s new/unique", len(jobs), relevant_count, len(by_url_company))
     ranked = sorted(
-        unique.values(),
+        by_url_company.values(),
         key=lambda item: (
             item.freshness_rank,
             -(item.posted_at.timestamp() if item.posted_at else 0),
@@ -454,8 +466,9 @@ def main(argv: list[str] | None = None) -> int:
     if ranked and sent:
         for job in ranked:
             seen[job.dedupe_key] = now_utc().isoformat()
-    retention = int(config["search"].get("state_retention_days", STATE_RETENTION_DAYS_DEFAULT))
-    save_seen(seen, retention)
+    if not args.dry_run:
+        retention = int(config["search"].get("state_retention_days", STATE_RETENTION_DAYS_DEFAULT))
+        save_seen(seen, retention)
     return 0
 
 

@@ -148,17 +148,25 @@ def age_text(posted_at: datetime | None) -> str:
 # Keyword matching (word-boundary aware, kills "intern" -> "international")
 # --------------------------------------------------------------------------
 
+# Terms that are common words when lowercased ("IT" -> "it") must match
+# case-exactly, otherwise every English summary matches them.
+EXACT_CASE_TERMS = {"it"}
+
+
 def term_pattern(term: str) -> re.Pattern[str]:
     """Compile a term into a word-boundary anchored pattern.
 
     Boundaries are only added next to alphanumeric characters so terms like
     ``C++`` or ``.NET`` still match correctly.
     """
-    cleaned = normalize_text(term)
-    escaped = re.escape(cleaned)
-    prefix = r"\b" if cleaned[:1].isalnum() else ""
-    suffix = r"\b" if cleaned[-1:].isalnum() else ""
-    return re.compile(f"{prefix}{escaped}{suffix}", re.IGNORECASE)
+    original = re.sub(r"\s+", " ", term or "").strip()
+    if not original:
+        return re.compile(r"(?!x)x")  # never-matching pattern for empty terms
+    escaped = re.escape(original)
+    prefix = r"\b" if original[:1].isalnum() else ""
+    suffix = r"\b" if original[-1:].isalnum() else ""
+    flags = 0 if original.lower() in EXACT_CASE_TERMS else re.IGNORECASE
+    return re.compile(f"{prefix}{escaped}{suffix}", flags)
 
 
 class Matcher:
@@ -410,8 +418,9 @@ def extract_rekrute(source: str, html: str, page_url: str, default_location: str
             slug_parts = m.group(1).split("-")
             # drop the trailing city token(s): keep everything before the final 1-2 segments
             company = "-".join(slug_parts[:-1]).replace("-", " ").strip() if len(slug_parts) > 1 else ""
-        card = link.find_parent(["li", "div", "article"])
-        card_text = card.get_text(" ", strip=True)[:800] if card else ""
+        # deliberately NOT ingesting the surrounding container text: on rekrute
+        # the parent holds neighboring offers, and their words ("stage", "java")
+        # would make non-internship jobs pass the relevance filter
         jobs.append(
             Job(
                 source=source,
@@ -419,8 +428,8 @@ def extract_rekrute(source: str, html: str, page_url: str, default_location: str
                 company=company or "Unknown Company",
                 location=location or default_location,
                 url=urljoin_page(page_url, href),
-                posted_at=infer_date_from_text(card_text),
-                summary=f"{raw_title}. {card_text}"[:800],
+                posted_at=None,
+                summary=raw_title,
             )
         )
     return jobs

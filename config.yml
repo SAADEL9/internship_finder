@@ -35,10 +35,23 @@ filters:
   internship_terms:
     - stage
     - stage pfe
+    - pfe
+    - stage de fin d'études
+    - stage fin d'études
+    - fin d'études
+    - pré-embauche
+    - pre-embauche
+    - pré embauche
+    - pre embauche
+    - stage 6 mois
+    - stage de 6 mois
+    - stage 4 mois
+    - stage 3 mois
+    - stage ingénieur
+    - stage académique
+    - stagiaire
     - internship
     - intern
-    - stagiaire
-    - pfe
   # Title-level exclusions: a job whose TITLE matches one of these is dropped
   # unless the title itself also contains an internship term.
   exclude_title_terms:
@@ -51,7 +64,28 @@ filters:
     - marketing
     - comptable
     - juriste
+  # A job must ALSO match at least one of these (IT / software domain).
   skills:
+    # IT domain (broad indicators)
+    - informatique
+    - développement
+    - développement web
+    - développement logiciel
+    - software
+    - web
+    - mobile
+    - data
+    - big data
+    - data analyst
+    - data science
+    - machine learning
+    - intelligence artificielle
+    - cybersécurité
+    - sécurité informatique
+    - réseaux
+    - cloud
+    - ERP
+    - CRM
     # Languages
     - Java
     - JavaScript
@@ -81,6 +115,7 @@ filters:
     - GitLab CI
     - GitHub Actions
     - CI/CD
+    - DevOps
     # Cloud
     - AWS
     - Azure
@@ -90,6 +125,7 @@ filters:
     - MySQL
     - MongoDB
     - Oracle
+    - SQL
     # General SWE
     - Full Stack
     - Backend
@@ -100,11 +136,14 @@ filters:
     - Génie informatique
     - Développeur
     - Developer
+    - IT
 
 queries:
   - "stage informatique"
   - "stage pfe informatique"
   - "stage fin d'études informatique"
+  - "stage pré embauche"
+  - "stage 6 mois informatique"
   - "stage développeur"
   - "stage ingénieur informatique"
   - "stagiaire informatique"

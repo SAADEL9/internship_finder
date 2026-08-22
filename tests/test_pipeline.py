@@ -85,6 +85,17 @@ def test_filter_keeps_best_duplicate():
     assert len(result) == 1
 
 
+def test_filter_collapses_same_url_different_title():
+    """Same offer listed twice with slightly different titles (rekrute listing
+    vs sidebar) must collapse to one entry."""
+    a = Job("s", "Graphic Designer en CDD", "cnexia", "Casablanca", "https://x.com/offre-1.html",
+            summary="graphic designer cdd casablanca stage java informatique")
+    b = Job("s", "Graphic Designer en CDD  Casablanca", "cnexia", "Casablanca", "https://x.com/offre-1.html",
+            summary="graphic designer cdd casablanca stage java informatique")
+    result = filter_rank_dedupe([a, b], MATCHER, CONFIG, {})
+    assert len({j.url for j in result}) == 1
+
+
 def test_discord_message_empty():
     msg = discord_message([])
     assert msg["embeds"][0]["title"].startswith("No new matching")

@@ -11,10 +11,15 @@ twice daily.
 - **Per-source extractors**: dedicated parsers for the sites that work
   (dreamjob.ma, rekrute.com, marocannonces.com, talent.com, SuccessFactors boards),
   plus schema.org JSON-LD and CSS card heuristics as a generic fallback.
-- **Precise matching**: word-boundary keyword matching (so "intern" no longer
-  matches *international* and "java" no longer matches *JavaScript*), with a
-  relaxed rule — Location AND (Internship Term OR Skill) — and title-level
-  exclusions (senior/manager/… dropped unless the title says stage/intern).
+- **Precise matching — IT internships only**: a job must match all three of
+  (1) a **location** (Casablanca/Morocco), (2) an **internship term**
+  (stage, PFE, pré-embauche, stage 6 mois, stagiaire, internship, …), and
+  (3) an **IT/software skill or domain term** (informatique, java, devops,
+  full stack, développeur, data, …). Word-boundary matching means "intern"
+  doesn't match *international* and "java" doesn't match *JavaScript*, and
+  non-IT internships (Stage RH, …) and non-internship IT jobs (CDI) are
+  rejected. Title-level exclusions (senior/manager/…) also apply unless the
+  title itself says stage/intern.
 - **Polite & parallel fetching**: one request lane per domain (sequential with a
   delay inside a domain, parallel across domains), `robots.txt` respected,
   retries with exponential backoff on 429/5xx.

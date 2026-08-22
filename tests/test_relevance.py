@@ -1,15 +1,19 @@
 """Relevance filtering and scoring."""
 from datetime import timedelta
+from pathlib import Path
 
+import yaml
 from extractors import Job, Matcher, now_utc
 from scraper import is_relevant, score_job
 
-
+# The user-facing scenarios below run against the REAL config lists, so a
+# config edit that breaks matching (e.g. removing "informatique") fails tests.
+CONFIG = yaml.safe_load((Path(__file__).resolve().parent.parent / "config.yml").read_text(encoding="utf-8"))
 MATCHER = Matcher(
-    locations=["casablanca", "morocco"],
-    internship_terms=["stage", "internship", "intern", "pfe", "stagiaire"],
-    skills=["java", "react", "python", "spring"],
-    exclude_title_terms=["senior", "manager", "commercial"],
+    locations=CONFIG["filters"]["locations"],
+    internship_terms=CONFIG["filters"]["internship_terms"],
+    skills=CONFIG["filters"]["skills"],
+    exclude_title_terms=CONFIG["filters"].get("exclude_title_terms", []),
 )
 
 
@@ -27,14 +31,33 @@ def test_requires_location():
     assert not is_relevant(j, MATCHER)
 
 
-def test_requires_term_or_skill():
-    j = job(title="CDI Chef cuisinier", summary="Restaurant à Casablanca")
+def test_requires_skill_or_it_domain():
+    # non-IT internships must NOT pass
+    j = job(title="Stage RH - 6 mois", summary="Ressources humaines à Casablanca")
     assert not is_relevant(j, MATCHER)
 
 
-def test_relaxed_skill_only_match():
+def test_requires_internship_term():
+    # non-internship IT jobs must NOT pass
     j = job(title="Développeur React", summary="React frontend à Casablanca, CDI junior")
-    assert is_relevant(j, MATCHER)  # location + skill, no internship term
+    assert not is_relevant(j, MATCHER)
+
+
+def test_stage_plus_it_passes():
+    j = job(title="Stage PFE Développeur Java", summary="stage java casablanca")
+    assert is_relevant(j, MATCHER)
+
+
+def test_pre_embauche_variants_pass():
+    for title in ("Stage pré-embauche Développeur Informatique",
+                  "Stage pré embauche Java Casablanca",
+                  "Stagiaire pre-embauche Spring Boot"):
+        assert is_relevant(job(title=title, summary="développeur"), MATCHER), title
+
+
+def test_stage_6_mois_informatique_passes():
+    j = job(title="Stage 6 mois Informatique", summary="stage de 6 mois développement web Casablanca")
+    assert is_relevant(j, MATCHER)
 
 
 def test_international_not_treated_as_intern():

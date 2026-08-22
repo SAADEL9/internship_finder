@@ -62,6 +62,24 @@ def test_rekrute_shape():
     assert first.url.startswith("https://www.rekrute.com/offre-emploi-stagiaire")
 
 
+def test_rekrute_does_not_ingest_neighbor_offers():
+    """The parent container holds neighboring offers; their words must NOT end
+    up in this job's summary (they would defeat the relevance filter)."""
+    html = """
+    <html><body><ul>
+      <li>
+        <a href="/offre-emploi-graphic-designer-recrutement-cnexia-rabat-185001.html">
+          Graphic Designer en CDD | Rabat (Maroc)</a>
+        <div>Stage Java Spring Casablanca - autre offre voisine</div>
+      </li>
+    </ul></body></html>
+    """
+    jobs = extract_rekrute("rekrute", html, "https://www.rekrute.com/offres.html", "Morocco")
+    assert len(jobs) == 1
+    assert "Stage Java" not in jobs[0].summary
+    assert "Graphic Designer" in jobs[0].summary
+
+
 def test_marocannonces_shape():
     html = """
     <html><body>

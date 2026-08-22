@@ -59,3 +59,9 @@ def test_matcher_exclusions():
     assert m.matched_excluded("Senior Software Engineer")
     assert m.matched_excluded("Relationship Manager")
     assert not m.matched_excluded("Junior Developer")
+
+
+def test_it_acronym_is_case_exact():
+    # "IT" must not match the English word "it" in running text
+    assert term_pattern("IT").search("Stage IT Casablanca")
+    assert not term_pattern("IT").search("Apply for it today")

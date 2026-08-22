@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from extractors import (
     Job,
+    extract_detail_date,
     extract_json_ld,
     extract_marocannonces,
     extract_rekrute,
@@ -172,6 +173,28 @@ def test_json_ld_ignores_valid_through():
     </script>"""
     jobs = extract_json_ld(soup_of(html), "board", PAGE, "Morocco")
     assert jobs[0].posted_at is None  # validThrough must NOT be used as posted date
+
+
+def test_extract_detail_date_from_json_ld():
+    html = """
+    <script type="application/ld+json">
+    {"@type": "JobPosting", "title": "X", "datePosted": "2026-08-20",
+     "hiringOrganization": "Y", "url": "/1"}
+    </script>"""
+    assert extract_detail_date(html) is not None
+    assert extract_detail_date(html).day == 20
+
+
+def test_extract_detail_date_from_publiee_text():
+    # rekrute-style: visible text "Publiée il y a 3 jours"
+    html = "<html><body><div>Publiée il y a 3 jours</div><h1>Stagiaire</h1></body></html>"
+    parsed = extract_detail_date(html)
+    assert parsed is not None
+    assert 2 <= (now_utc() - parsed).days <= 4
+
+
+def test_extract_detail_date_absent():
+    assert extract_detail_date("<html><body><h1>Job</h1><p>no dates here</p></body></html>") is None
 
 
 def test_dedupe_key_stable_and_query_insensitive():

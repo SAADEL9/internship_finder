@@ -13,13 +13,17 @@
 # a source with a static `url` is fetched exactly once per run.
 
 search:
-  max_age_days: 14
+  # Only posts newer than this are alerted (detail-page dates are checked
+  # for offers whose listing shows no date).
+  max_age_days: 7
   priority_hours: 24
   max_results_per_run: 40
   request_timeout_seconds: 25
   max_workers: 8
   politeness_delay_seconds: 0.6
   state_retention_days: 90
+  # Max offer detail pages fetched per run to verify freshness of undated jobs
+  date_check_max_jobs: 20
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 filters:

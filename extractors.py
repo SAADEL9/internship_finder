@@ -524,6 +524,20 @@ def extract_successfactors(source: str, html: str, page_url: str, default_locati
     return jobs
 
 
+def extract_detail_date(html: str) -> datetime | None:
+    """Best-effort publication date from a job's own detail page.
+
+    Order: schema.org JSON-LD ``datePosted``, then visible-text patterns
+    ("Publiée il y a 3 jours", "posted 2 days ago", explicit dates).
+    """
+    soup = soup_of(html)
+    for job in extract_json_ld(soup, "detail", "https://example.invalid/"):
+        if job.posted_at:
+            return job.posted_at
+    text = soup.get_text(" ", strip=True)
+    return infer_date_from_text(text[:4000])
+
+
 def extract_rss_entries(source: str, feed: Any, default_location: str = "") -> list[Job]:
     """feedparser feed object -> Jobs."""
     jobs: list[Job] = []

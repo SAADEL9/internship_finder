@@ -20,7 +20,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 import requests
 import yaml
@@ -31,6 +31,7 @@ from extractors import (
     Job,
     Matcher,
     age_text,
+    extract_detail_date,
     extract_rss_entries,
     normalize_text,
     normalize_url,
@@ -216,14 +217,76 @@ def score_job(job: Job, matcher: Matcher, priority_hours: int, max_age_days: int
     job.match_reason = "; ".join(reasons)
 
 
+def detail_url(url: str) -> str:
+    """Canonical URL for detail-page fetches: keeps the query string (talent.com
+    offer ids live in ?id=...) unlike normalize_url which strips it."""
+    return (url or "").split("#")[0].strip()
+
+
+def verify_undated_jobs(
+    client: HttpClient,
+    jobs: list[Job],
+    matcher: Matcher,
+    seen: dict[str, str],
+    config: dict[str, Any],
+) -> set[str]:
+    """Fetch detail pages of relevant-but-undated jobs to learn their real age.
+
+    Returns the set of detail URLs whose page was fetched successfully but
+    carried no date anywhere — those are treated as unverifiable and dropped.
+    Detail fetch failures (network/blocked) leave the job in "unknown age"
+    limbo instead of dropping it.
+    """
+    candidates: dict[str, list[Job]] = {}
+    for job in jobs:
+        if job.posted_at or not is_relevant(job, matcher):
+            continue
+        if job.dedupe_key in seen:
+            continue
+        candidates.setdefault(detail_url(job.url), []).append(job)
+
+    limit = int(config["search"].get("date_check_max_jobs", 20))
+    selected = dict(sorted(candidates.items())[:limit])
+    if not selected:
+        return set()
+
+    logging.info("Date verification: fetching %s offer pages (undated)", len(selected))
+    tasks = [
+        {"id": index, "source": f"date-check:{urlparse(url).netloc}", "url": url}
+        for index, url in enumerate(selected)
+    ]
+    results, _ = fetch_all(
+        client,
+        tasks,
+        max_workers=int(config["search"].get("max_workers", 8)),
+        politeness_delay=float(config["search"].get("politeness_delay_seconds", 0.5)),
+    )
+    no_date_urls: set[str] = set()
+    for task, (url, group) in zip(tasks, selected.items()):
+        result = results.get(task["id"])
+        if result is None or not result.ok:
+            continue  # fetch failed: keep unknown-age
+        found = extract_detail_date(result.html)
+        if found:
+            for job in group:
+                job.posted_at = found
+        else:
+            no_date_urls.add(url)
+    if no_date_urls:
+        logging.info("Date verification: %s offers expose no date -> dropped", len(no_date_urls))
+    return no_date_urls
+
+
 def filter_rank_dedupe(
     jobs: list[Job],
     matcher: Matcher,
     config: dict[str, Any],
     seen: dict[str, str],
+    undated_no_date: set[str] | None = None,
 ) -> list[Job]:
     search = config["search"]
     max_age = timedelta(days=search["max_age_days"])
+    undated_no_date = undated_no_date or set()
     unique: dict[str, Job] = {}
     by_url_company: dict[tuple[str, str], Job] = {}
     relevant_count = 0
@@ -231,6 +294,9 @@ def filter_rank_dedupe(
         if not job.title or not job.url:
             continue
         if job.posted_at and now_utc() - job.posted_at > max_age:
+            continue
+        # page was fetched and carries no date at all: freshness unverifiable
+        if not job.posted_at and detail_url(job.url) in undated_no_date:
             continue
         if not is_relevant(job, matcher):
             continue
@@ -436,7 +502,8 @@ def main(argv: list[str] | None = None) -> int:
     stats: dict[str, SourceStats] = {}
     started = time.monotonic()
     jobs = run_extraction(client, tasks, config, stats, matcher)
-    ranked = filter_rank_dedupe(jobs, matcher, config, seen)
+    undated_no_date = verify_undated_jobs(client, jobs, matcher, seen, config)
+    ranked = filter_rank_dedupe(jobs, matcher, config, seen, undated_no_date)
 
     if debug:
         dump = ROOT / "debug_jobs.json"
